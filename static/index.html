@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CineLocal</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@300;400&display=swap"
+    rel="stylesheet" />
+
+  <style>
+    /* ══════════════════════════════════════════════
+       VARIABLES & RESET
+    ══════════════════════════════════════════════ */
+    :root {
+      --bg: #080a0e;
+      --bg2: #0e1117;
+      --bg3: #151b24;
+      --surface: #1a2130;
+      --border: rgba(255, 255, 255, 0.07);
+      --gold: #c9a84c;
+      --gold2: #f0d080;
+      --red: #e53030;
+      --text: #e8e0d0;
+      --muted: #7a7060;
+      --radius: 4px;
+      --card-w: 220px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Crimson Pro', serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ══════════════════════════════════════════════
+       GRAIN OVERLAY
+    ══════════════════════════════════════════════ */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.4;
+    }
+
+    /* ══════════════════════════════════════════════
+       NAV
+    ══════════════════════════════════════════════ */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      padding: 0 3rem;
+      height: 64px;
+      background: linear-gradient(to bottom, rgba(8, 10, 14, 0.98), transparent);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+
+    .logo {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.8rem;
+      letter-spacing: 0.12em;
+      color: var(--gold);
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .logo span { color: var(--text); }
+
+    .search-wrap {
+      flex: 1;
+      max-width: 400px;
+      position: relative;
+    }
+    .search-wrap input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 0.78rem;
+      padding: 0.5rem 1rem 0.5rem 2.4rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .search-wrap input:focus { border-color: var(--gold); }
+    .search-wrap svg {
+      position: absolute;
+      left: 0.75rem; top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .nav-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* Toggle mode PC/TV */
+    .mode-toggle {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .mode-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      padding: 0.45rem 0.9rem;
+      cursor: pointer;
+      transition: all .2s;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .mode-btn.active {
+      background: var(--gold);
+      color: #080a0e;
+    }
+    .mode-btn:hover:not(.active) { color: var(--text); }
+
+    .btn-refresh {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.4rem 0.8rem;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: all .2s;
+      letter-spacing: 0.05em;
+    }
+    .btn-refresh:hover { border-color: var(--gold); color: var(--gold); }
+
+    google-cast-launcher {
+      --connected-color: var(--gold);
+      --disconnected-color: var(--muted);
+      width: 24px; height: 24px;
+      cursor: pointer;
+    }
+
+    /* ══════════════════════════════════════════════
+       HERO
+    ══════════════════════════════════════════════ */
+    #hero {
+      height: 100vh;
+      display: flex;
+      align-items: flex-end;
+      padding: 0 3rem 5rem;
+      position: relative;
+      overflow: hidden;
+    }
+    #hero-bg {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center 20%;
+      filter: blur(2px) brightness(0.35);
+      transform: scale(1.04);
+      transition: background-image 0.6s ease;
+    }
+    #hero-grad {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to right, rgba(8, 10, 14, 0.98) 0%, rgba(8, 10, 14, 0.6) 50%, transparent 100%),
+                  linear-gradient(to top, rgba(8, 10, 14, 1) 0%, transparent 40%);
+    }
+    #hero-content { position: relative; max-width: 540px; }
+    #hero-tag {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      color: var(--gold);
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+    #hero-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(3rem, 6vw, 5.5rem);
+      line-height: 0.95;
+      letter-spacing: 0.04em;
+      color: #fff;
+      text-shadow: 0 2px 40px rgba(0, 0, 0, 0.8);
+      margin-bottom: 1rem;
+    }
+    #hero-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      margin-bottom: 1.5rem;
+    }
+    .hero-btns { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .btn-hero {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border: none;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1rem;
+      letter-spacing: 0.1em;
+      padding: 0.7rem 1.6rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all .2s;
+    }
+    .btn-hero.primary { background: var(--gold); color: #080a0e; }
+    .btn-hero.primary:hover { background: var(--gold2); transform: translateY(-1px); }
+    .btn-hero.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .btn-hero.secondary:hover { border-color: var(--gold); color: var(--gold); }
+
+    /* ══════════════════════════════════════════════
+       CATALOGUE
+    ══════════════════════════════════════════════ */
+    #catalogue {
+      padding: 0 3rem 4rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .category-section { margin-bottom: 3rem; }
+    .category-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.1rem;
+      letter-spacing: 0.15em;
+      color: var(--gold);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .category-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .category-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      color: var(--muted);
+    }
+
+    .movies-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr));
+      gap: 1rem;
+    }
+
+    /* ══════════════════════════════════════════════
+       CARDS
+    ══════════════════════════════════════════════ */
+    .movie-card {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 2/3;
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      background: var(--surface);
+      transition: transform .3s cubic-bezier(.2, .8, .3, 1), box-shadow .3s;
+      border: 1px solid var(--border);
+    }
+    .movie-card:hover {
+      transform: scale(1.04) translateY(-4px);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--gold);
+      z-index: 10;
+    }
+
+    .card-thumb {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: filter .3s;
+    }
+    .movie-card:hover .card-thumb { filter: brightness(0.5); }
+
+    .card-placeholder {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      background: linear-gradient(135deg, var(--bg3), var(--surface));
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 3rem;
+      color: var(--muted);
+      padding: 0.5rem;
+      text-align: center;
+    }
+    .card-placeholder span {
+      font-size: 0.65rem;
+      font-family: 'DM Mono', monospace;
+    }
+
+    .card-info {
+      position: absolute;
+      inset: 0;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      background: linear-gradient(to top, rgba(8, 10, 14, 0.95) 0%, transparent 50%);
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .movie-card:hover .card-info { opacity: 1; }
+
+    .card-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.05rem;
+      letter-spacing: 0.05em;
+      line-height: 1.1;
+      color: #fff;
+      margin-bottom: 0.25rem;
+    }
+    .card-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.62rem;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+    .card-actions {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+    }
+    .card-btn {
+      flex: 1;
+      border: none;
+      padding: 0.4rem 0;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: filter .15s;
+      background: var(--gold);
+      color: #080a0e;
+    }
+    .card-btn:hover { filter: brightness(1.15); }
+
+    .card-badge {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid var(--border);
+      padding: 0.15rem 0.4rem;
+      border-radius: 2px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* ══════════════════════════════════════════════
+       PLAYER MODAL (mode PC)
+    ══════════════════════════════════════════════ */
+    #player-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0, 0, 0, 0.92);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .3s;
+    }
+    #player-modal.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+    .player-container {
+      position: relative;
+      width: min(92vw, 1200px);
+      background: #000;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 40px 120px rgba(0, 0, 0, 0.9);
+      transform: scale(0.96);
+      transition: transform .3s;
+    }
+    #player-modal.open .player-container { transform: scale(1); }
+
+    .player-header {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      z-index: 10;
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent);
+    }
+    .player-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.2rem;
+      letter-spacing: 0.08em;
+      color: #fff;
+    }
+    .icon-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .icon-btn:hover { background: rgba(255, 255, 255, 0.25); }
+
+    #player-video {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16/9;
+      background: #000;
+    }
+
+    /* ══════════════════════════════════════════════
+       CAST STATUS (mode TV)
+    ══════════════════════════════════════════════ */
+    .cast-status-bar {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 150;
+      background: var(--surface);
+      border: 1px solid var(--gold);
+      border-radius: 4px;
+      padding: 0.75rem 1.5rem;
+      display: none;
+      align-items: center;
+      gap: 0.75rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--gold);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    }
+    .cast-status-bar.visible { display: flex; }
+    .cast-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--gold);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    /* ══════════════════════════════════════════════
+       STATES
+    ══════════════════════════════════════════════ */
+    #loading, #empty {
+      padding: 8rem 3rem;
+      text-align: center;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+    }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 2px solid var(--border);
+      border-top-color: var(--gold);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Scroll custom */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+
+    /* ══════════════════════════════════════════════
+       RESPONSIVE
+    ══════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+      nav { padding: 0 1rem; gap: 1rem; }
+      #hero { padding: 0 1.2rem 4rem; }
+      #catalogue { padding: 0 1.2rem 3rem; }
+      :root { --card-w: 140px; }
+      .search-wrap { max-width: none; }
+      .mode-btn { padding: 0.4rem 0.6rem; font-size: 0.65rem; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ═══ NAVIGATION ═══════════════════════════════════════════════════════ -->
+  <nav>
+    <a class="logo" href="#">CINE<span>LOCAL</span></a>
+
+    <div class="search-wrap">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+      <input type="text" id="search" placeholder="Rechercher un film…" autocomplete="off" />
+    </div>
+
+    <div class="nav-right">
+      <div class="mode-toggle" id="modeToggle">
+        <button class="mode-btn active" data-mode="pc" onclick="setMode('pc')">🖥️</button>
+        <button class="mode-btn" data-mode="tv" onclick="setMode('tv')">📺</button>
+      </div>
+      <div class="mode-toggle" id="langToggle">
+        <button class="mode-btn active" data-lang="all" onclick="setLang('all')">Tout</button>
+        <button class="mode-btn" data-lang="vf" onclick="setLang('vf')">🇫🇷</button>
+        <button class="mode-btn" data-lang="en" onclick="setLang('en')">🇬🇧</button>
+      </div>
+      <div class="mode-toggle" id="kindToggle">
+        <button class="mode-btn active" data-kind="all" onclick="setKind('all')">Tout</button>
+        <button class="mode-btn" data-kind="movie" onclick="setKind('movie')">Films</button>
+        <button class="mode-btn" data-kind="tv" onclick="setKind('tv')">Séries</button>
+      </div>
+      <button class="btn-refresh" onclick="refreshMovies()">↺</button>
+      <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
+    </div>
+  </nav>
+
+  <!-- ═══ HERO ═════════════════════════════════════════════════════════════ -->
+  <section id="hero">
+    <div id="hero-bg"></div>
+    <div id="hero-grad"></div>
+    <div id="hero-content">
+      <div id="hero-tag">À la une</div>
+      <div id="hero-title">Chargement…</div>
+      <div id="hero-meta"></div>
+      <div class="hero-btns">
+        <button class="btn-hero primary" id="heroPrimaryBtn" onclick="playHero()">
+          <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M5 3l14 9-14 9V3z" />
+          </svg>
+          <span id="heroPrimaryLabel">LIRE</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ CATALOGUE ════════════════════════════════════════════════════════ -->
+  <main id="catalogue">
+    <div id="loading">
+      <div class="spinner"></div>
+      Chargement de la bibliothèque…
+    </div>
+    <div id="empty" style="display:none">Aucun film trouvé dans ~/nvme_data</div>
+    <div id="movies-container"></div>
+  </main>
+
+  <!-- ═══ PLAYER MODAL (mode PC uniquement) ════════════════════════════════ -->
+  <div id="player-modal">
+    <div class="player-container">
+      <div class="player-header">
+        <div class="player-title" id="player-title"></div>
+        <button class="icon-btn" onclick="closePlayer()" title="Fermer">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <video id="player-video" controls preload="metadata"></video>
+    </div>
+  </div>
+
+  <!-- ═══ CAST STATUS (mode TV uniquement) ═════════════════════════════════ -->
+  <div class="cast-status-bar" id="castStatus">
+    <div class="cast-dot"></div>
+    <span id="castStatusText">Diffusion en cours sur la TV</span>
+  </div>
+
+  <!-- ═══ SCRIPT ════════════════════════════════════════════════════════════ -->
+  <script>
+    // ══════════════════════════════════════════════════════════════════════════
+    // ÉTAT GLOBAL
+    // ══════════════════════════════════════════════════════════════════════════
+    let allMovies = [];
+    let currentMovie = null;
+    let castSession = null;
+    let castAvailable = false;
+    let currentMode = localStorage.getItem('cinelocal-mode') || 'pc';
+    let castSdkLoaded = false;
+    let currentLang = localStorage.getItem('cinelocal-lang') || 'all';
+    let currentKind = localStorage.getItem('cinelocal-kind') || 'all';
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // GESTION DU MODE PC/TV
+    // ══════════════════════════════════════════════════════════════════════════
+    function setMode(mode) {
+      currentMode = mode;
+      localStorage.setItem('cinelocal-mode', mode);
+
+      // Met à jour le toggle visuel
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+
+      // Bouton Cast visible uniquement en mode TV
+      document.getElementById('castBtn').style.display = (mode === 'tv') ? '' : 'none';
+
+      // Bouton hero : "LIRE" en PC, "CASTER" en TV
+      document.getElementById('heroPrimaryLabel').textContent = (mode === 'tv') ? 'CASTER' : 'LIRE';
+
+      // Charge le SDK Cast si besoin
+      if (mode === 'tv' && !castSdkLoaded) loadCastSdk();
+
+      // Ferme le player modal si on switch vers TV
+      if (mode === 'tv') closePlayer();
+
+      // Re-render les cartes pour adapter les boutons
+      if (allMovies.length) applyFilters();
+    }
+
+    function setLang(lang) {
+      currentLang = lang;
+      localStorage.setItem('cinelocal-lang', lang);
+      document.querySelectorAll('#langToggle .mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.lang === lang);
+      });
+      applyFilters();
+    }
+
+    function setKind(kind) {
+      currentKind = kind;
+      localStorage.setItem('cinelocal-kind', kind);
+      document.querySelectorAll('#kindToggle .mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.kind === kind);
+      });
+      applyFilters();
+    }
+
+    function applyFilters(e) {
+      // Ignore complètement l'event, on lit la valeur directement
+      const searchInput = document.getElementById('search');
+      const q = searchInput ? searchInput.value.toLowerCase().trim() : '';
+      
+      let filtered = allMovies;
+      
+      if (currentLang !== 'all') {
+        filtered = filtered.filter(m => m.lang === currentLang);
+      }
+      if (currentKind !== 'all') {
+        filtered = filtered.filter(m => m.kind === currentKind);
+      }
+      if (q) {
+        filtered = filtered.filter(m =>
+          m.title.toLowerCase().includes(q) ||
+          (m.year || '').includes(q) ||
+          m.category.toLowerCase().includes(q)
+        );
+      }
+      renderMovies(filtered);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // CHROMECAST SDK (chargé à la demande)
+    // ══════════════════════════════════════════════════════════════════════════
+    window['__onGCastApiAvailable'] = (isAvailable) => {
+      castAvailable = isAvailable;
+      console.log('[Cast] API available:', isAvailable);
+      if (!isAvailable) return;
+
+      const ctx = cast.framework.CastContext.getInstance();
+      ctx.setOptions({
+        receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+      });
+
+      ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+        const s = e.sessionState;
+        const S = cast.framework.SessionState;
+        if (s === S.SESSION_STARTED || s === S.SESSION_RESUMED) {
+          castSession = ctx.getCurrentSession();
+          document.getElementById('castStatus').classList.add('visible');
+          if (currentMovie) loadMediaOnCast(currentMovie);
+        } else if (s === S.SESSION_ENDED) {
+          castSession = null;
+          document.getElementById('castStatus').classList.remove('visible');
+        }
+      });
+    };
+
+    function loadCastSdk() {
+      if (castSdkLoaded) return;
+      castSdkLoaded = true;
+      const s = document.createElement('script');
+      s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+      document.head.appendChild(s);
+    }
+
+    function loadMediaOnCast(movie) {
+      if (!castSession) return;
+
+      const mimeMap = {
+        '.mp4':  'video/mp4',
+        '.mkv':  'video/x-matroska',
+        '.webm': 'video/webm',
+      };
+      const mime = mimeMap[movie.ext] || 'video/mp4';
+
+      const mediaInfo = new chrome.cast.media.MediaInfo(
+        `${window.location.origin}/cast/${movie.id}`,
+        mime
+      );
+      mediaInfo.metadata = new chrome.cast.media.MovieMediaMetadata();
+      mediaInfo.metadata.title = movie.title;
+      if (movie.year) mediaInfo.metadata.releaseDate = movie.year;
+      if (movie.poster) mediaInfo.metadata.images = [new chrome.cast.Image(movie.poster)];
+
+      const req = new chrome.cast.media.LoadRequest(mediaInfo);
+      castSession.loadMedia(req)
+        .then(() => {
+          console.log('[Cast] Lecture démarrée :', movie.title);
+          document.getElementById('castStatusText').textContent = `▶ ${movie.title}`;
+        })
+        .catch(e => console.error('[Cast] Erreur :', e));
+    }
+
+    function startCast(movie) {
+      if (!castAvailable) {
+        alert('Cast disponible uniquement dans Google Chrome.');
+        return;
+      }
+      currentMovie = movie;
+      if (castSession) {
+        loadMediaOnCast(movie);
+      } else {
+        // Ouvre le dialogue natif de sélection du Chromecast
+        document.getElementById('castBtn').click();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // LECTURE PC
+    // ══════════════════════════════════════════════════════════════════════════
+    function playLocal(movie) {
+      currentMovie = movie;
+      const video = document.getElementById('player-video');
+      const modal = document.getElementById('player-modal');
+      document.getElementById('player-title').textContent = movie.title;
+
+      video.src = `/stream/${movie.id}`;
+      video.load();
+      video.play().catch(() => {});
+
+      modal.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closePlayer() {
+      const video = document.getElementById('player-video');
+      video.pause();
+      video.src = '';
+      document.getElementById('player-modal').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ACTIONS UNIFIÉES (utilisent le mode courant)
+    // ══════════════════════════════════════════════════════════════════════════
+    function playMovie(id) {
+      const m = allMovies.find(x => x.id === id);
+      if (!m) return;
+      currentMode === 'tv' ? startCast(m) : playLocal(m);
+    }
+
+    function openMovie(id) {
+      const m = allMovies.find(x => x.id === id);
+      if (m) setHero(m);
+    }
+
+    function playHero() {
+      if (currentMovie) playMovie(currentMovie.id);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // CHARGEMENT ET RENDU
+    // ══════════════════════════════════════════════════════════════════════════
+    async function loadMovies() {
+      try {
+        const r = await fetch('/api/movies');
+        allMovies = await r.json();
+        renderMovies(allMovies);
+        if (allMovies.length > 0) {
+          const featured = allMovies[Math.floor(Math.random() * Math.min(allMovies.length, 10))];
+          setHero(featured);
+        }
+      } catch (e) {
+        document.getElementById('loading').innerHTML =
+          `<div style="color:var(--red)">Impossible de joindre le serveur Flask.</div>`;
+      }
+    }
+
+    async function refreshMovies() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('movies-container').style.display = 'none';
+      await fetch('/api/movies/refresh');
+      await loadMovies();
+    }
+
+    function renderMovies(movies) {
+      document.getElementById('loading').style.display = 'none';
+      const container = document.getElementById('movies-container');
+      container.style.display = '';
+
+      if (movies.length === 0) {
+        document.getElementById('empty').style.display = 'block';
+        container.innerHTML = '';
+        return;
+      }
+      document.getElementById('empty').style.display = 'none';
+
+      const byCategory = {};
+      movies.forEach(m => {
+        (byCategory[m.category] = byCategory[m.category] || []).push(m);
+      });
+
+      container.innerHTML = Object.entries(byCategory).map(([cat, films]) => `
+        <section class="category-section">
+          <div class="category-title">
+            ${cat}
+            <span class="category-count">${films.length} titres</span>
+          </div>
+          <div class="movies-row">
+            ${films.map(movieCard).join('')}
+          </div>
+        </section>
+      `).join('');
+    }
+
+    function movieCard(m) {
+      const ext = m.ext.replace('.', '').toUpperCase();
+      const btnLabel = currentMode === 'tv' ? '📺 Caster' : '▶ Lire';
+
+      const poster = m.poster
+        ? `<img class="card-thumb" src="${m.poster}" alt="${escHtml(m.title)}" loading="lazy"
+                onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />`
+        : '';
+
+      return `
+        <div class="movie-card"
+             onclick="openMovie('${m.id}')"
+             onmouseenter="previewHero('${m.id}')">
+          ${poster}
+          <div class="card-placeholder" style="display:${m.poster ? 'none' : 'flex'}">
+            🎬<span>${escHtml(m.title.substring(0, 30))}</span>
+          </div>
+          <div class="card-badge">${ext} · ${m.lang.toUpperCase()}</div>
+          <div class="card-info">
+            <div class="card-title">${escHtml(m.title)}</div>
+            <div class="card-meta">${m.year || ''} · ${m.size_mb} Mo</div>
+            <div class="card-actions">
+              <button class="card-btn" onclick="event.stopPropagation();playMovie('${m.id}')">${btnLabel}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // HERO
+    // ══════════════════════════════════════════════════════════════════════════
+    let heroTimeout;
+    function previewHero(id) {
+      clearTimeout(heroTimeout);
+      heroTimeout = setTimeout(() => {
+        const m = allMovies.find(x => x.id === id);
+        if (m) setHero(m);
+      }, 400);
+    }
+
+    function setHero(m) {
+      currentMovie = m;
+      document.getElementById('hero-title').textContent = m.title;
+      document.getElementById('hero-meta').textContent =
+        [m.year, m.category !== 'Films' ? m.category : '', `${m.size_mb} Mo`]
+          .filter(Boolean).join(' · ');
+      document.getElementById('hero-tag').textContent = m.category;
+
+      const bg = m.backdrop || m.poster;
+      if (bg) {
+        const img = new Image();
+        img.onload = () => {
+          document.getElementById('hero-bg').style.backgroundImage = `url(${bg})`;
+        };
+        img.src = bg;
+      } else {
+        document.getElementById('hero-bg').style.backgroundImage = '';
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // RECHERCHE
+    // ══════════════════════════════════════════════════════════════════════════
+    document.getElementById('search').addEventListener('input', applyFilters);
+
+    // Fermer le player en cliquant sur l'overlay ou avec Échap
+    document.getElementById('player-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('player-modal')) closePlayer();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closePlayer();
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // UTILS
+    // ══════════════════════════════════════════════════════════════════════════
+    function escHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // INITIALISATION
+    // ══════════════════════════════════════════════════════════════════════════
+    setMode(currentMode);
+    setLang(currentLang);
+    setKind(currentKind);
+    loadMovies();
+  </script>
+</body>
+</html>
