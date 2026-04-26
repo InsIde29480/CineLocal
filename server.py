@@ -79,7 +79,6 @@ _EDITION_TAGS = (
     r'\s*(Edition|Cut|Version)?\b'
 )
 
-
 def clean_title(filename: str) -> str:
     """Nettoie un nom de fichier pour afficher un titre lisible."""
     name = Path(filename).stem
@@ -123,16 +122,55 @@ def extract_tags(filename: str) -> dict:
     # Langue : _VF explicite, sinon VO par défaut
     lang = "vf" if re.search(r'_VF(?=_|$|\.)', stem, re.IGNORECASE) else "en"
     
-    # Type : _TV explicite OU pattern SxxEyy → série, sinon film
-    is_tv = (
-        bool(re.search(r'_TV(?=_|$|\.)', stem, re.IGNORECASE)) or
-        bool(re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', stem))
-    )
+    # Device : _TV explicite → tv, sinon pc (par défaut)
+    # (Les séries SxxEyy ne sont plus automatiquement "tv" côté device,
+    #  elles peuvent être taggées _PC ou _TV selon ta conversion)
+    device = "tv" if re.search(r'_TV(?=_|$|\.)', stem, re.IGNORECASE) else "pc"
+    
+    # Kind (série ou film) — indépendant du device
+    is_series = bool(re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', stem))
     
     return {
         "lang": lang,
-        "kind": "tv" if is_tv else "movie",
+        "device": device,
+        "kind": "tv" if is_series else "movie",
     }
+
+def parse_episode(filename: str) -> dict | None:
+    """Extrait saison/épisode d'un nom de fichier de série.
+    Retourne None si ce n'est pas un épisode."""
+    match = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', filename)
+    if not match:
+        return None
+    return {
+        "season":  int(match.group(1)),
+        "episode": int(match.group(2)),
+    }
+
+def series_title(filename: str) -> str:
+    """Extrait le titre 'propre' d'une série depuis un nom d'épisode."""
+    name = Path(filename).stem
+    
+    # Tronque tout ce qui suit le pattern SxxEyy
+    name = re.sub(r'[Ss]\d{1,2}[Ee]\d{1,2}.*$', '', name)
+    
+    # Vire l'année (1999) ou 1999 — la série a un titre, pas une année
+    name = re.sub(r'\(?\b(19[5-9]\d|20[0-3]\d)\b\)?', '', name)
+    
+    # Vire crochets et parenthèses (et leur contenu)
+    name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', name)
+    
+    # Vire les tags personnels
+    name = re.sub(r'_(?:PC|TV|VF|EN)(?=_|$|\.)', '', name, flags=re.IGNORECASE)
+    
+    # Vire tirets / underscores / points en tant que séparateurs
+    name = re.sub(r'[._\-]+', ' ', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    # Vire les tirets isolés en fin
+    name = re.sub(r'\s*-\s*$', '', name).strip()
+    
+    return name.title()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYSE FFPROBE DES CODECS
@@ -272,13 +310,15 @@ def fetch_tmdb(title: str, year: str | None) -> dict | None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def scan_movies() -> list:
-    """Scanne le dossier films et enrichit via TMDB."""
-    movies = []
+    """Scanne le dossier et regroupe les épisodes en séries."""
+    items = []
+    series_groups = {}  # clé: "TitreSerie|device|lang" -> liste d'épisodes
+
     if not MOVIES_DIR.exists():
         print(f"⚠  Dossier introuvable : {MOVIES_DIR}")
-        return movies
+        return items
 
-    # Construction de la liste
+    # Parcours initial : sépare films et épisodes
     for filepath in sorted(MOVIES_DIR.rglob("*")):
         if filepath.suffix.lower() not in SUPPORTED_EXTS:
             continue
@@ -287,48 +327,107 @@ def scan_movies() -> list:
 
         movie_id = str(hash(str(filepath)) & 0xFFFFFFFF)
         tags = extract_tags(filepath.name)
+        ep = parse_episode(filepath.name)
+
         try:
             rel = filepath.relative_to(MOVIES_DIR)
             category = rel.parts[0] if len(rel.parts) > 1 else "Films"
         except ValueError:
             category = "Films"
 
-        movies.append({
+        common = {
             "id":         movie_id,
-            "title":      clean_title(filepath.name),
             "filename":   filepath.name,
-            "year":       extract_year(filepath.name),
             "category":   category,
             "size_mb":    round(filepath.stat().st_size / 1024 / 1024),
             "ext":        filepath.suffix.lower(),
             "path":       str(filepath),
             "stream_url": f"/stream/{movie_id}",
             "cast_url":   f"/cast/{movie_id}",
-            "poster":     None,
-            "backdrop":   None,
-            "overview":   "",
             "lang":       tags["lang"],
-            "kind":       tags["kind"],
+            "device":     tags["device"],
+        }
+
+        if ep:
+            # C'est un épisode → on l'agrège dans une série
+            stitle = series_title(filepath.name)
+            group_key = f"{stitle}|{tags['device']}|{tags['lang']}"
+
+            episode_data = {
+                **common,
+                "season":  ep["season"],
+                "episode": ep["episode"],
+                "title":   f"S{ep['season']:02d}E{ep['episode']:02d}",
+            }
+
+            if group_key not in series_groups:
+                series_groups[group_key] = {
+                    "stitle": stitle,
+                    "category": category,
+                    "tags": tags,
+                    "episodes": [],
+                }
+            series_groups[group_key]["episodes"].append(episode_data)
+        else:
+            # C'est un film
+            items.append({
+                **common,
+                "title":    clean_title(filepath.name),
+                "year":     extract_year(filepath.name),
+                "kind":     "movie",
+                "poster":   None,
+                "backdrop": None,
+                "overview": "",
+            })
+
+    # Construction des entrées "série"
+    for group_key, group in series_groups.items():
+        # ID stable basé sur le titre + device + lang
+        series_id = "s_" + str(hash(group_key) & 0xFFFFFFFF)
+        # Trie les épisodes
+        group["episodes"].sort(key=lambda e: (e["season"], e["episode"]))
+
+        items.append({
+            "id":          series_id,
+            "title":       group["stitle"],
+            "year":        None,
+            "category":    group["category"],
+            "size_mb":     sum(e["size_mb"] for e in group["episodes"]),
+            "ext":         group["episodes"][0]["ext"],
+            "kind":        "series",
+            "lang":        group["tags"]["lang"],
+            "device":      group["tags"]["device"],
+            "episodes":    group["episodes"],
+            "episode_count": len(group["episodes"]),
+            "season_count": len({e["season"] for e in group["episodes"]}),
+            "poster":      None,
+            "backdrop":    None,
+            "overview":    "",
         })
 
-    # Enrichissement TMDB en parallèle
-    to_fetch = [m for m in movies
-                if f"{re.sub(_YEAR_PATTERN, '', m['title']).strip()}|{m['year'] or ''}"
-                not in _tmdb_cache]
-    if to_fetch:
-        print(f"🎞  Recherche des affiches TMDB pour {len(to_fetch)} film(s)...")
+    # Enrichissement TMDB en parallèle (films + séries)
+    def fetch_for_item(item):
+        if item["kind"] == "series":
+            return _fetch_tmdb_tv(item["title"])
+        return _fetch_tmdb_movie(item["title"], item.get("year"))
+
+    to_fetch_count = sum(1 for it in items
+                         if (it["kind"] == "series" and f"TV|{it['title']}" not in _tmdb_cache)
+                         or (it["kind"] == "movie" and f"{re.sub(_YEAR_PATTERN, '', it['title']).strip()}|{it.get('year') or ''}" not in _tmdb_cache))
+    if to_fetch_count:
+        print(f"🎞  Recherche TMDB pour {to_fetch_count} entrée(s)...")
 
     with ThreadPoolExecutor(max_workers=10) as ex:
-        results = list(ex.map(lambda m: fetch_tmdb(m["title"], m["year"]), movies))
+        results = list(ex.map(fetch_for_item, items))
 
-    for m, tmdb in zip(movies, results):
+    for it, tmdb in zip(items, results):
         if tmdb:
-            m["poster"]   = tmdb["poster"]
-            m["backdrop"] = tmdb["backdrop"]
-            m["overview"] = tmdb["overview"]
+            it["poster"]   = tmdb["poster"]
+            it["backdrop"] = tmdb["backdrop"]
+            it["overview"] = tmdb["overview"]
 
     _save_tmdb_cache()
-    return movies
+    return items
 
 
 # Cache mémoire global
@@ -347,7 +446,15 @@ def get_movies() -> list:
 
 
 def get_movie_by_id(movie_id: str) -> dict | None:
-    return next((m for m in get_movies() if m["id"] == movie_id), None)
+    """Retrouve un film, une série, OU un épisode dans une série."""
+    for item in get_movies():
+        if item["id"] == movie_id:
+            return item
+        if item.get("kind") == "series":
+            for ep in item.get("episodes", []):
+                if ep["id"] == movie_id:
+                    return ep
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,7 +491,7 @@ def _stream_file_ranged(filepath: str, mimetype: str):
             f.seek(start)
             remaining = length
             while remaining:
-                chunk = f.read(min(65536, remaining))
+                chunk = f.read(min(67108864, remaining))
                 if not chunk:
                     break
                 remaining -= len(chunk)
