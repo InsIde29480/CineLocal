@@ -142,5 +142,39 @@
     "backdrop": "https://image.tmdb.org/t/p/w1280/34RM2aSBqWpNhVzMupTq6QHF6uU.jpg",
     "overview": "À Tokyo, le reporter américain Jake Adelstein, âgé de 24 ans, intègre le service police et justice du « Yomiuri Shimbun », le plus grand quotidien japonais. Alors qu’il collabore avec la police locale, il est contacté par la mafia. Il devient un interlocuteur des yakusas tout en continuant d’être un informateur de la police. Mais cette position ambivalente n’est pas sans danger.",
     "tmdb_title": "Tokyo Vice"
-  }
+  },
+  "The Lighthouse|": {
+    "poster": "https://image.tmdb.org/t/p/w342/8DTJq8btlJHVELjasGCa1mLMXUj.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/sYLzRuEcwSz0L1Z92wQNrETHU9O.jpg",
+    "overview": "Le film se passe dans une île lointaine et mystérieuse de Nouvelle Angleterre à la fin du XIXème siècle, et met en scène une \"histoire hypnotique et hallucinatoire\" de deux gardiens de phare.",
+    "tmdb_title": "The Lighthouse"
+  },
+  "The Last Of Us|": {
+    "poster": "https://image.tmdb.org/t/p/w342/s2nCqDXbLLJnZYVJu8H6iw9yVEI.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/kjYoRKqCrwTHF67fsLoAhZIOPmJ.jpg",
+    "overview": "N, un jeune subsaharien, traverse le désert pour rejoindre le nord de l’Afrique et effectuer un passage clandestin en Europe. Après un braquage, il se trouve livré à lui-même en Tunisie. Finalement, il décide de traverser solitairement la mer vers un pays européen. Commence alors pour lui une véritable quête initiatique.",
+    "tmdb_title": "The Last of Us"
+  },
+  "Shingeki No Kyojin - Oade08 - Lost Girls Lost In The Cruel World|": null,
+  "Shingeki No Kyojin - Oade01 - Ilse'S Notebook Memoirs Of A Scout Regiment Member|": null,
+  "Shingeki No Kyojin - Oade03 - Distress|": null,
+  "TV|Shingeki No Kyojin": {
+    "poster": "https://image.tmdb.org/t/p/w342/cEnxvrGIGwLz7ZfCx3g8oULJxrr.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/rqbCbjB19amtOtFQbb3K2lgm2zv.jpg",
+    "overview": "Dans un monde ravagé par des titans mangeurs d’homme depuis plus d’un siècle, les rares survivants de l’Humanité n’ont d’autre choix pour survivre que de se barricader dans une cité-forteresse. Le jeune Eren, témoin de la mort de sa mère dévorée par un titan, n’a qu’un rêve : entrer dans le corps d’élite chargé de découvrir l’origine des titans, et les annihiler jusqu’au dernier…",
+    "tmdb_title": "L'Attaque des Titans"
+  },
+  "Shingeki No Kyojin - Oade05 - No Regrets Part 2|": null,
+  "Shingeki No Kyojin - Oade02 - The Sudden Visitor The Torturous Curse Of Youth|": null,
+  "TV|Shingeki No Kyojin The Final Season": {
+    "poster": "https://image.tmdb.org/t/p/w342/cEnxvrGIGwLz7ZfCx3g8oULJxrr.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/rqbCbjB19amtOtFQbb3K2lgm2zv.jpg",
+    "overview": "Dans un monde ravagé par des titans mangeurs d’homme depuis plus d’un siècle, les rares survivants de l’Humanité n’ont d’autre choix pour survivre que de se barricader dans une cité-forteresse. Le jeune Eren, témoin de la mort de sa mère dévorée par un titan, n’a qu’un rêve : entrer dans le corps d’élite chargé de découvrir l’origine des titans, et les annihiler jusqu’au dernier…",
+    "tmdb_title": "L'Attaque des Titans"
+  },
+  "Shingeki No Kyojin - Oade07 - Lost Girls Wall Sina, Goodbye Part 2|": null,
+  "Shingeki No Kyojin - Oade06 - Lost Girls Wall Sina, Goodbye Part 1|": null,
+  "Shingeki No Kyojin - Oade04 - No Regrets Part 1|": null,
+  "Shingeki No Kyojin - The Final Season - S04P03 - The Final Chapters - 1|": null,
+  "Shingeki No Kyojin - The Final Season - S04P04 - The Final Chapters - 2|": null
 }

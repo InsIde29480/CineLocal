@@ -587,7 +587,6 @@ def stream_video(movie_id):
         a_arg=["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
     )
 
-
 # ─── STREAM CHROMECAST ────────────────────────────────────────────────────────
 
 @app.route("/cast/<movie_id>")
@@ -614,7 +613,8 @@ def cast_video(movie_id):
 
     # Transcodage adapté
     v_arg = ["-c:v", "copy"] if video_ok else [
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
+#        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
+        "-c:v", "libx264", "-preset", "-crf", "23"
     ]
     a_arg = ["-c:a", "copy"] if audio_ok else [
         "-c:a", "aac", "-b:a", "192k", "-ac", "2"
@@ -626,6 +626,48 @@ def cast_video(movie_id):
 
     return _transcode_stream(filepath, v_arg, a_arg)
 
+
+# ─── STREAM CHROMECAST HDMI ───────────────────────────────────────────────────
+
+# Variable globale pour suivre le process en cours
+_current_player = None
+
+@app.route("/play/<movie_id>", methods=["POST"])
+def play_local(movie_id):
+    """Lance MPV en plein écran sur le Pi, sortie HDMI."""
+    global _current_player
+    
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return jsonify({"status": "error", "message": "Film introuvable"}), 404
+    
+    # Stoppe le lecteur précédent s'il y en a un
+    if _current_player and _current_player.poll() is None:
+        _current_player.terminate()
+    
+    # Lance MPV en plein écran avec décodage hardware
+    _current_player = subprocess.Popen([
+        "mpv",
+        "--fullscreen",
+        "--hwdec=auto",
+        "--no-osc",
+        "--no-input-default-bindings",  # désactive les raccourcis clavier accidentels
+        movie["path"]
+    ], env={**os.environ, "DISPLAY": ":0"})
+    
+    print(f"🎬 Lecture locale : {movie['filename']}")
+    return jsonify({"status": "ok", "playing": movie["title"]})
+
+
+@app.route("/stop", methods=["POST"])
+def stop_local():
+    """Arrête la lecture locale."""
+    global _current_player
+    if _current_player and _current_player.poll() is None:
+        _current_player.terminate()
+        _current_player = None
+        return jsonify({"status": "stopped"})
+    return jsonify({"status": "nothing_playing"})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LANCEMENT

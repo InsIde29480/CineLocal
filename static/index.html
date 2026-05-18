@@ -713,6 +713,7 @@
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc" onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn" data-mode="tv" onclick="setMode('tv')">📺</button>
+  	<button class="mode-btn" data-mode="local" onclick="setMode('local')">📽️ TV directe</button>
       </div>
       <div class="mode-toggle" id="langToggle">
         <button class="mode-btn active" data-lang="all" onclick="setLang('all')">Tout</button>
@@ -726,6 +727,7 @@
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
+	<button class="btn-refresh" onclick="fetch('/stop', {method: 'POST'})">⏹ Stop TV</button>
     </div>
   </nav>
 
@@ -955,6 +957,28 @@
         document.getElementById('castBtn').click();
       }
     }
+
+function playLocalDirect(movie) {
+  fetch(`/play/${movie.id}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'ok') {
+        // Affiche un toast "Lecture sur la TV"
+        alert(`▶ Lecture lancée sur la TV : ${data.playing}`);
+      }
+    })
+    .catch(e => alert('Erreur: ' + e));
+}
+
+// Modifie playMovie pour gérer le mode "local"
+function playMovie(id) {
+  const m = allMovies.find(x => x.id === id);
+  if (!m) return;
+  
+  if (currentMode === 'local')      playLocalDirect(m);
+  else if (currentMode === 'tv')    startCast(m);
+  else                              playLocal(m);
+}
 
     // ══════════════════════════════════════════════════════════════════════════
     // LECTURE PC
