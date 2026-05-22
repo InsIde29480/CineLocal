@@ -7,7 +7,6 @@ Lance avec: python server.py
 import os
 import re
 import json
-import queue
 import subprocess
 import threading
 from pathlib import Path
@@ -24,6 +23,7 @@ from flask import Flask, jsonify, send_file, request, Response, send_from_direct
 MOVIES_DIR       = Path.home() / "nvme_data"
 STATIC_DIR       = Path(__file__).parent / "static"
 TMDB_CACHE_FILE  = Path(__file__).parent / ".tmdb_cache.json"
+TRACKS_CACHE_DIR = Path(__file__).parent / ".tracks_cache"
 
 SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
@@ -31,13 +31,10 @@ PORT             = 8765
 
 TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
 
-# Codecs compatibles Chromecast (récepteur par défaut)
-# Ajoute "hevc" à VIDEO_OK si tu as un Chromecast Ultra / Google TV 4K
 VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
-
-# Codecs audio décodables par les navigateurs web
 BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
+SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -45,11 +42,11 @@ BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 # ══════════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__, static_folder=str(STATIC_DIR))
+TRACKS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.after_request
 def add_cors_headers(response):
-    """Headers CORS pour compatibilité Chromecast et lecture navigateur."""
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Headers'] = 'Range'
     response.headers['Access-Control-Expose-Headers'] = (
@@ -79,105 +76,60 @@ _EDITION_TAGS = (
     r'\s*(Edition|Cut|Version)?\b'
 )
 
+
 def clean_title(filename: str) -> str:
-    """Nettoie un nom de fichier pour afficher un titre lisible."""
     name = Path(filename).stem
-
-    # Retire les tags personnels _PC / _TV / _VF / _EN (EN PREMIER)
-    # Le `\b` ne fonctionne pas après _, on utilise une lookahead
     name = re.sub(r'_(?:PC|TV|VF|EN)(?=_|$|\.)', '', name, flags=re.IGNORECASE)
-
-    # Tronque après l'année (vire tous les tags techniques qui suivent)
     year_match = re.search(_YEAR_PATTERN, name)
     if year_match:
         name = name[:year_match.end()]
-
-    # Supprime les tags de release et d'édition
     name = re.sub(_RELEASE_TAGS, '', name, flags=re.IGNORECASE)
     name = re.sub(_EDITION_TAGS, '', name, flags=re.IGNORECASE)
-
-    # Supprime les suffixes de releaser (ex: -gismo65)
     name = re.sub(r'[-_][a-zA-Z0-9]+$', '', name)
-
-    # Supprime crochets/parenthèses et leur contenu
     name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', name)
     name = re.sub(r'[\(\[\{].*$', '', name)
-
-    # Séparateurs → espaces
     name = re.sub(r'[._]+', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-
     return name.title()
 
 
 def extract_year(filename: str) -> str | None:
-    """Extrait l'année du nom de fichier."""
     match = re.search(_YEAR_PATTERN, filename)
     return match.group(1) if match else None
 
+
 def extract_tags(filename: str) -> dict:
-    """Extrait les tags _VF / _EN / _TV / _PC du nom de fichier."""
     stem = Path(filename).stem
-    
-    # Langue : _VF explicite, sinon VO par défaut
     lang = "vf" if re.search(r'_VF(?=_|$|\.)', stem, re.IGNORECASE) else "en"
-    
-    # Device : _TV explicite → tv, sinon pc (par défaut)
-    # (Les séries SxxEyy ne sont plus automatiquement "tv" côté device,
-    #  elles peuvent être taggées _PC ou _TV selon ta conversion)
     device = "tv" if re.search(r'_TV(?=_|$|\.)', stem, re.IGNORECASE) else "pc"
-    
-    # Kind (série ou film) — indépendant du device
     is_series = bool(re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', stem))
-    
-    return {
-        "lang": lang,
-        "device": device,
-        "kind": "tv" if is_series else "movie",
-    }
+    return {"lang": lang, "device": device, "kind": "tv" if is_series else "movie"}
+
 
 def parse_episode(filename: str) -> dict | None:
-    """Extrait saison/épisode d'un nom de fichier de série.
-    Retourne None si ce n'est pas un épisode."""
     match = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', filename)
     if not match:
         return None
-    return {
-        "season":  int(match.group(1)),
-        "episode": int(match.group(2)),
-    }
+    return {"season": int(match.group(1)), "episode": int(match.group(2))}
+
 
 def series_title(filename: str) -> str:
-    """Extrait le titre 'propre' d'une série depuis un nom d'épisode."""
     name = Path(filename).stem
-    
-    # Tronque tout ce qui suit le pattern SxxEyy
     name = re.sub(r'[Ss]\d{1,2}[Ee]\d{1,2}.*$', '', name)
-    
-    # Vire l'année (1999) ou 1999 — la série a un titre, pas une année
     name = re.sub(r'\(?\b(19[5-9]\d|20[0-3]\d)\b\)?', '', name)
-    
-    # Vire crochets et parenthèses (et leur contenu)
     name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', name)
-    
-    # Vire les tags personnels
     name = re.sub(r'_(?:PC|TV|VF|EN)(?=_|$|\.)', '', name, flags=re.IGNORECASE)
-    
-    # Vire tirets / underscores / points en tant que séparateurs
     name = re.sub(r'[._\-]+', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-    
-    # Vire les tirets isolés en fin
     name = re.sub(r'\s*-\s*$', '', name).strip()
-    
     return name.title()
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ANALYSE FFPROBE DES CODECS
+# ANALYSE FFPROBE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def probe_codecs(filepath: str) -> dict:
-    """Retourne les codecs vidéo et audio d'un fichier."""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
@@ -196,7 +148,210 @@ def probe_codecs(filepath: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TMDB — AFFICHES ET BACKDROPS
+# EXTRACTION DES SOUS-TITRES
+# (les pistes audio sont gérées nativement par Chrome via video.audioTracks)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _lang_label(code: str) -> str:
+    return {
+        "fre": "Français", "fra": "Français", "fr": "Français",
+        "eng": "English",  "en": "English",
+        "spa": "Español",  "es": "Español",
+        "ger": "Deutsch",  "deu": "Deutsch", "de": "Deutsch",
+        "ita": "Italiano", "it": "Italiano",
+        "jpn": "日本語",    "ja": "日本語",
+        "und": "Inconnue",
+    }.get((code or "und").lower(), (code or "und").upper())
+
+
+_extraction_locks = {}
+
+
+def extract_tracks(movie: dict) -> dict:
+    """
+    Analyse un film et extrait ses sous-titres en VTT sur disque.
+    Cache le résultat dans .tracks_cache/<movie_id>/tracks.json
+    """
+    movie_id = movie["id"]
+    filepath = movie["path"]
+    cache_dir = TRACKS_CACHE_DIR / movie_id
+    metadata_file = cache_dir / "tracks.json"
+
+    if movie_id not in _extraction_locks:
+        _extraction_locks[movie_id] = threading.Lock()
+
+    with _extraction_locks[movie_id]:
+        # ─── Cache : vérifie si SRT externes modifiés depuis ────────────────
+        if metadata_file.exists():
+            cache_mtime = metadata_file.stat().st_mtime
+            movie_dir = Path(filepath).parent
+            movie_stem = Path(filepath).stem
+
+            srt_changed = False
+            for ext in ('.srt', '.vtt'):
+                for sub_file in movie_dir.glob(f"{movie_stem}*{ext}"):
+                    if sub_file.stat().st_mtime > cache_mtime:
+                        srt_changed = True
+                        print(f"📝 Nouveau sous-titre détecté : {sub_file.name}")
+                        break
+                if srt_changed:
+                    break
+
+            if not srt_changed:
+                try:
+                    return json.loads(metadata_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        print(f"🔍 Extraction des pistes : {movie['filename']}")
+
+        # ─── ffprobe ────────────────────────────────────────────────────────
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_streams", str(filepath)
+            ], capture_output=True, text=True, timeout=30)
+            data = json.loads(result.stdout)
+        except Exception as e:
+            print(f"⚠  ffprobe échec : {e}")
+            return {"audio_tracks": [], "subtitle_tracks": []}
+
+        streams = data.get("streams", [])
+        audio_tracks = []
+        subtitle_tracks = []
+        audio_idx = 0
+        subs_idx = 0
+
+        # ─── Pistes internes ────────────────────────────────────────────────
+        for stream in streams:
+            codec_type = stream.get("codec_type")
+            tags = stream.get("tags", {})
+            lang = (tags.get("language", "und") or "und").lower()
+            title = tags.get("title", "")
+
+            if codec_type == "audio":
+                # On garde les métadonnées audio pour info (utile en fallback)
+                audio_tracks.append({
+                    "index":    audio_idx,
+                    "language": lang,
+                    "label":    title or _lang_label(lang),
+                    "codec":    stream.get("codec_name"),
+                    "channels": stream.get("channels"),
+                })
+                audio_idx += 1
+
+            elif codec_type == "subtitle":
+                codec = stream.get("codec_name", "")
+                if codec in SUBS_TEXT_CODECS:
+                    vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
+                    try:
+                        subprocess.run([
+                            "ffmpeg", "-y", "-i", str(filepath),
+                            "-map", f"0:s:{subs_idx}",
+                            "-c:s", "webvtt",
+                            str(vtt_path)
+                        ], capture_output=True, timeout=60)
+                        if vtt_path.exists() and vtt_path.stat().st_size > 0:
+                            subtitle_tracks.append({
+                                "index":    subs_idx,
+                                "language": lang,
+                                "label":    title or _lang_label(lang),
+                                "url":      f"/track/subs/{movie_id}/{subs_idx}",
+                            })
+                            print(f"   ✓ Sous-titres {lang} extraits")
+                    except Exception as e:
+                        print(f"   ⚠ Échec sous-titres {subs_idx} : {e}")
+                else:
+                    print(f"   ⏭  Sous-titres image ({codec}) ignorés")
+                subs_idx += 1
+
+        # ─── Sous-titres externes (.srt / .vtt à côté du film) ──────────────
+        movie_dir = Path(filepath).parent
+        movie_stem = Path(filepath).stem
+
+        for ext in ('.srt', '.vtt'):
+            for sub_file in movie_dir.glob(f"{movie_stem}.*{ext}"):
+                parts = sub_file.stem.split('.')
+                lang = parts[-1].lower() if len(parts) > 1 else "und"
+                if len(lang) > 3 or not lang.isalpha():
+                    lang = "und"
+
+                external_idx = 1000 + subs_idx
+                vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+
+                try:
+                    if ext == '.vtt':
+                        import shutil
+                        shutil.copy(sub_file, vtt_path)
+                    else:
+                        subprocess.run([
+                            "ffmpeg", "-y", "-i", str(sub_file),
+                            "-c:s", "webvtt",
+                            str(vtt_path)
+                        ], capture_output=True, timeout=30)
+
+                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
+                        subtitle_tracks.append({
+                            "index":    external_idx,
+                            "language": lang,
+                            "label":    f"{_lang_label(lang)} (externe)",
+                            "url":      f"/track/subs/{movie_id}/{external_idx}",
+                        })
+                        print(f"   ✓ Sous-titres externes : {sub_file.name} ({lang})")
+                        subs_idx += 1
+                except Exception as e:
+                    print(f"   ⚠ Échec sous-titres externes {sub_file.name} : {e}")
+
+            simple_sub = movie_dir / f"{movie_stem}{ext}"
+            if simple_sub.exists():
+                external_idx = 1000 + subs_idx
+                vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+                try:
+                    if ext == '.vtt':
+                        import shutil
+                        shutil.copy(simple_sub, vtt_path)
+                    else:
+                        subprocess.run([
+                            "ffmpeg", "-y", "-i", str(simple_sub),
+                            "-c:s", "webvtt",
+                            str(vtt_path)
+                        ], capture_output=True, timeout=30)
+
+                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
+                        subtitle_tracks.append({
+                            "index":    external_idx,
+                            "language": "und",
+                            "label":    "Sous-titres (externe)",
+                            "url":      f"/track/subs/{movie_id}/{external_idx}",
+                        })
+                        print(f"   ✓ Sous-titres externes : {simple_sub.name}")
+                        subs_idx += 1
+                except Exception as e:
+                    print(f"   ⚠ Échec sous-titres externes {simple_sub.name} : {e}")
+
+        # ─── Sauvegarde du cache ────────────────────────────────────────────
+        metadata = {
+            "audio_tracks":    audio_tracks,
+            "subtitle_tracks": subtitle_tracks,
+        }
+        metadata_file.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        print(f"   ✅ {len(audio_tracks)} audio, {len(subtitle_tracks)} sous-titres")
+        return metadata
+
+
+def clear_tracks_cache(movie_id: str):
+    cache_dir = TRACKS_CACHE_DIR / movie_id
+    if cache_dir.exists():
+        import shutil
+        shutil.rmtree(cache_dir)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TMDB
 # ══════════════════════════════════════════════════════════════════════════════
 
 _tmdb_lock = threading.Lock()
@@ -223,7 +378,6 @@ _tmdb_cache = _load_tmdb_cache()
 
 
 def _tmdb_format(m: dict, title_key: str = "title") -> dict:
-    """Formate un résultat brut TMDB en dict standard."""
     return {
         "poster":   f"https://image.tmdb.org/t/p/w342{m['poster_path']}"    if m.get("poster_path")   else None,
         "backdrop": f"https://image.tmdb.org/t/p/w1280{m['backdrop_path']}" if m.get("backdrop_path") else None,
@@ -233,12 +387,10 @@ def _tmdb_format(m: dict, title_key: str = "title") -> dict:
 
 
 def _fetch_tmdb_tv(title: str) -> dict | None:
-    """Recherche une série sur TMDB."""
     clean = re.sub(r'\s*[Ss]\d{1,2}[Ee]\d{1,2}.*$', '', title).strip()
     key = f"TV|{clean}"
     if key in _tmdb_cache:
         return _tmdb_cache[key]
-
     try:
         r = requests.get(
             "https://api.themoviedb.org/3/search/tv",
@@ -260,28 +412,20 @@ def _fetch_tmdb_tv(title: str) -> dict | None:
 
 
 def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
-    """Recherche un film sur TMDB."""
     query = re.sub(_YEAR_PATTERN, '', title).strip()
     key = f"{query}|{year or ''}"
     if key in _tmdb_cache:
         return _tmdb_cache[key]
-
     try:
         params = {"api_key": TMDB_API_KEY, "query": query, "language": "fr-FR"}
         if year:
             params["year"] = year
-
-        r = requests.get("https://api.themoviedb.org/3/search/movie",
-                         params=params, timeout=5)
+        r = requests.get("https://api.themoviedb.org/3/search/movie", params=params, timeout=5)
         results = r.json().get("results", [])
-
-        # Fallback sans l'année si rien n'a matché
         if not results and year:
             params.pop("year")
-            r = requests.get("https://api.themoviedb.org/3/search/movie",
-                             params=params, timeout=5)
+            r = requests.get("https://api.themoviedb.org/3/search/movie", params=params, timeout=5)
             results = r.json().get("results", [])
-
         if results:
             result = _tmdb_format(results[0], title_key="title")
             print(f"✅ TMDB : '{query}' → '{results[0].get('title')}'")
@@ -296,29 +440,25 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
 
 
 def fetch_tmdb(title: str, year: str | None) -> dict | None:
-    """Recherche TMDB avec détection automatique série/film."""
     if not TMDB_API_KEY:
         return None
-    # Détecte le pattern SxxEyy (série)
     if re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', title):
         return _fetch_tmdb_tv(title)
     return _fetch_tmdb_movie(title, year)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SCAN DE LA BIBLIOTHÈQUE
+# SCAN
 # ══════════════════════════════════════════════════════════════════════════════
 
 def scan_movies() -> list:
-    """Scanne le dossier et regroupe les épisodes en séries."""
     items = []
-    series_groups = {}  # clé: "TitreSerie|device|lang" -> liste d'épisodes
+    series_groups = {}
 
     if not MOVIES_DIR.exists():
         print(f"⚠  Dossier introuvable : {MOVIES_DIR}")
         return items
 
-    # Parcours initial : sépare films et épisodes
     for filepath in sorted(MOVIES_DIR.rglob("*")):
         if filepath.suffix.lower() not in SUPPORTED_EXTS:
             continue
@@ -349,44 +489,32 @@ def scan_movies() -> list:
         }
 
         if ep:
-            # C'est un épisode → on l'agrège dans une série
             stitle = series_title(filepath.name)
             group_key = f"{stitle}|{tags['device']}|{tags['lang']}"
-
             episode_data = {
                 **common,
                 "season":  ep["season"],
                 "episode": ep["episode"],
                 "title":   f"S{ep['season']:02d}E{ep['episode']:02d}",
             }
-
             if group_key not in series_groups:
                 series_groups[group_key] = {
-                    "stitle": stitle,
-                    "category": category,
-                    "tags": tags,
-                    "episodes": [],
+                    "stitle": stitle, "category": category,
+                    "tags": tags, "episodes": [],
                 }
             series_groups[group_key]["episodes"].append(episode_data)
         else:
-            # C'est un film
             items.append({
                 **common,
                 "title":    clean_title(filepath.name),
                 "year":     extract_year(filepath.name),
                 "kind":     "movie",
-                "poster":   None,
-                "backdrop": None,
-                "overview": "",
+                "poster":   None, "backdrop": None, "overview": "",
             })
 
-    # Construction des entrées "série"
     for group_key, group in series_groups.items():
-        # ID stable basé sur le titre + device + lang
         series_id = "s_" + str(hash(group_key) & 0xFFFFFFFF)
-        # Trie les épisodes
         group["episodes"].sort(key=lambda e: (e["season"], e["episode"]))
-
         items.append({
             "id":          series_id,
             "title":       group["stitle"],
@@ -400,12 +528,9 @@ def scan_movies() -> list:
             "episodes":    group["episodes"],
             "episode_count": len(group["episodes"]),
             "season_count": len({e["season"] for e in group["episodes"]}),
-            "poster":      None,
-            "backdrop":    None,
-            "overview":    "",
+            "poster":      None, "backdrop": None, "overview": "",
         })
 
-    # Enrichissement TMDB en parallèle (films + séries)
     def fetch_for_item(item):
         if item["kind"] == "series":
             return _fetch_tmdb_tv(item["title"])
@@ -430,7 +555,6 @@ def scan_movies() -> list:
     return items
 
 
-# Cache mémoire global
 _movies_cache = None
 _movies_lock = threading.Lock()
 
@@ -446,7 +570,6 @@ def get_movies() -> list:
 
 
 def get_movie_by_id(movie_id: str) -> dict | None:
-    """Retrouve un film, une série, OU un épisode dans une série."""
     for item in get_movies():
         if item["id"] == movie_id:
             return item
@@ -458,26 +581,19 @@ def get_movie_by_id(movie_id: str) -> dict | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STREAMING VIDÉO
+# STREAMING
 # ══════════════════════════════════════════════════════════════════════════════
 
 MIME_MAP = {
     ".mp4":  "video/mp4",
     ".mkv":  "video/x-matroska",
-    ".avi":  "video/x-msvideo",
-    ".mov":  "video/quicktime",
     ".webm": "video/webm",
-    ".m4v":  "video/mp4",
-    ".wmv":  "video/x-ms-wmv",
-    ".ts":   "video/mp2t",
 }
 
 
 def _stream_file_ranged(filepath: str, mimetype: str):
-    """Sert un fichier avec support des Range requests (seek, Chromecast)."""
     file_size = os.path.getsize(filepath)
     range_header = request.headers.get("Range")
-
     if not range_header:
         return send_file(filepath, mimetype=mimetype, conditional=True)
 
@@ -507,7 +623,6 @@ def _stream_file_ranged(filepath: str, mimetype: str):
 
 
 def _transcode_stream(filepath: str, v_arg: list, a_arg: list):
-    """Stream un fichier transcodé à la volée via ffmpeg."""
     cmd = [
         "ffmpeg", "-i", str(filepath),
         *v_arg, *a_arg,
@@ -558,44 +673,51 @@ def api_refresh():
     return jsonify({"status": "ok", "count": len(get_movies())})
 
 
+@app.route("/api/tracks/<movie_id>")
+def api_tracks(movie_id):
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return jsonify({"error": "Film introuvable"}), 404
+    tracks = extract_tracks(movie)
+    return jsonify(tracks)
+
+
+@app.route("/api/tracks/<movie_id>/refresh")
+def api_tracks_refresh(movie_id):
+    clear_tracks_cache(movie_id)
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return jsonify({"error": "Film introuvable"}), 404
+    tracks = extract_tracks(movie)
+    return jsonify(tracks)
+
+
+@app.route("/track/subs/<movie_id>/<int:idx>")
+def serve_subs(movie_id, idx):
+    vtt_path = TRACKS_CACHE_DIR / movie_id / f"subs_{idx}.vtt"
+    if vtt_path.exists():
+        return send_file(str(vtt_path), mimetype="text/vtt")
+    return Response("Sous-titres introuvables", status=404)
+
+
 # ─── STREAM PC ────────────────────────────────────────────────────────────────
 
 @app.route("/stream/<movie_id>")
 def stream_video(movie_id):
-    """
-    Stream pour lecture navigateur (PC/mobile).
-    Transcode l'audio à la volée si incompatible (AC3/DTS/FLAC → AAC).
-    La vidéo est toujours copiée (pas de re-encodage).
-    """
+    """Stream pour lecture navigateur — sert toujours le fichier brut."""
     movie = get_movie_by_id(movie_id)
     if not movie:
         return Response("Film introuvable", status=404)
 
     filepath = movie["path"]
-    codecs = probe_codecs(filepath)
+    mimetype = MIME_MAP.get(movie["ext"], "video/mp4")
+    return _stream_file_ranged(filepath, mimetype)
 
-    # Si l'audio est compatible navigateur → fichier brut (Range OK, scrubbing OK)
-    if codecs["audio"] in BROWSER_AUDIO_OK:
-        mimetype = MIME_MAP.get(movie["ext"], "video/mp4")
-        return _stream_file_ranged(filepath, mimetype)
-
-    # Sinon → transcodage audio uniquement, vidéo copiée
-    print(f"🖥️  PC transcodage audio : {movie['filename']} ({codecs['audio']} → AAC)")
-    return _transcode_stream(
-        filepath,
-        v_arg=["-c:v", "copy"],
-        a_arg=["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-    )
 
 # ─── STREAM CHROMECAST ────────────────────────────────────────────────────────
 
 @app.route("/cast/<movie_id>")
 def cast_video(movie_id):
-    """
-    Stream pour Chromecast.
-    Transcode ce qui est nécessaire pour le récepteur par défaut.
-    Si tout est compatible → redirige vers /stream/ (fichier brut).
-    """
     movie = get_movie_by_id(movie_id)
     if not movie:
         return Response("Film introuvable", status=404)
@@ -606,15 +728,12 @@ def cast_video(movie_id):
     video_ok = codecs["video"] in VIDEO_OK
     audio_ok = codecs["audio"] in AUDIO_OK
 
-    # Tout compatible → redirection vers le fichier brut
     if video_ok and audio_ok:
         print(f"📺 Cast direct : {movie['filename']}")
         return redirect(f"/stream/{movie_id}", code=302)
 
-    # Transcodage adapté
     v_arg = ["-c:v", "copy"] if video_ok else [
-#        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
-        "-c:v", "libx264", "-preset", "-crf", "23"
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
     ]
     a_arg = ["-c:a", "copy"] if audio_ok else [
         "-c:a", "aac", "-b:a", "192k", "-ac", "2"
@@ -627,47 +746,40 @@ def cast_video(movie_id):
     return _transcode_stream(filepath, v_arg, a_arg)
 
 
-# ─── STREAM CHROMECAST HDMI ───────────────────────────────────────────────────
+# ─── LECTURE LOCALE HDMI (MPV) ────────────────────────────────────────────────
 
-# Variable globale pour suivre le process en cours
 _current_player = None
+
 
 @app.route("/play/<movie_id>", methods=["POST"])
 def play_local(movie_id):
-    """Lance MPV en plein écran sur le Pi, sortie HDMI."""
     global _current_player
-    
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"status": "error", "message": "Film introuvable"}), 404
-    
-    # Stoppe le lecteur précédent s'il y en a un
+
     if _current_player and _current_player.poll() is None:
         _current_player.terminate()
-    
-    # Lance MPV en plein écran avec décodage hardware
+
     _current_player = subprocess.Popen([
-        "mpv",
-        "--fullscreen",
-        "--hwdec=auto",
-        "--no-osc",
-        "--no-input-default-bindings",  # désactive les raccourcis clavier accidentels
+        "mpv", "--fullscreen", "--hwdec=auto", "--no-osc",
+        "--no-input-default-bindings",
         movie["path"]
     ], env={**os.environ, "DISPLAY": ":0"})
-    
+
     print(f"🎬 Lecture locale : {movie['filename']}")
     return jsonify({"status": "ok", "playing": movie["title"]})
 
 
 @app.route("/stop", methods=["POST"])
 def stop_local():
-    """Arrête la lecture locale."""
     global _current_player
     if _current_player and _current_player.poll() is None:
         _current_player.terminate()
         _current_player = None
         return jsonify({"status": "stopped"})
     return jsonify({"status": "nothing_playing"})
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LANCEMENT
@@ -681,6 +793,5 @@ if __name__ == "__main__":
     print(f"📺  Pour TV/Cast  : http://<ton-ip>:{PORT}")
     print("━" * 60)
 
-    get_movies()  # Pré-charge les films au démarrage
-
+    get_movies()
     app.run(host=HOST, port=PORT, debug=False, threaded=True)

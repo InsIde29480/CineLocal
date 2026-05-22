@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CineLocal</title>
 
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -14,280 +13,147 @@
     rel="stylesheet" />
 
   <style>
-    /* ══════════════════════════════════════════════
-       VARIABLES & RESET
-    ══════════════════════════════════════════════ */
     :root {
-      --bg: #080a0e;
-      --bg2: #0e1117;
-      --bg3: #151b24;
-      --surface: #1a2130;
-      --border: rgba(255, 255, 255, 0.07);
-      --gold: #c9a84c;
-      --gold2: #f0d080;
-      --red: #e53030;
-      --text: #e8e0d0;
-      --muted: #7a7060;
-      --radius: 4px;
-      --card-w: 220px;
+      --bg: #080a0e; --bg2: #0e1117; --bg3: #151b24;
+      --surface: #1a2130; --border: rgba(255, 255, 255, 0.07);
+      --gold: #c9a84c; --gold2: #f0d080; --red: #e53030;
+      --text: #e8e0d0; --muted: #7a7060;
+      --radius: 4px; --card-w: 220px;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
-
     body {
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       font-family: 'Crimson Pro', serif;
-      min-height: 100vh;
-      overflow-x: hidden;
+      min-height: 100vh; overflow-x: hidden;
     }
-
-    /* ══════════════════════════════════════════════
-       GRAIN OVERLAY
-    ══════════════════════════════════════════════ */
     body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
+      content: ''; position: fixed; inset: 0;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-      pointer-events: none;
-      z-index: 9999;
-      opacity: 0.4;
+      pointer-events: none; z-index: 9999; opacity: 0.4;
     }
 
-    /* ══════════════════════════════════════════════
-       NAV
-    ══════════════════════════════════════════════ */
+    /* ═══ NAV ════════════════════════════════════════ */
     nav {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      gap: 2rem;
-      padding: 0 3rem;
-      height: 64px;
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; gap: 2rem;
+      padding: 0 3rem; height: 64px;
       background: linear-gradient(to bottom, rgba(8, 10, 14, 0.98), transparent);
       border-bottom: 1px solid var(--border);
       backdrop-filter: blur(8px);
     }
-
     .logo {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.8rem;
-      letter-spacing: 0.12em;
-      color: var(--gold);
-      text-decoration: none;
-      flex-shrink: 0;
+      font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem;
+      letter-spacing: 0.12em; color: var(--gold);
+      text-decoration: none; flex-shrink: 0;
     }
     .logo span { color: var(--text); }
-
-    .search-wrap {
-      flex: 1;
-      max-width: 400px;
-      position: relative;
-    }
+    .search-wrap { flex: 1; max-width: 400px; position: relative; }
     .search-wrap input {
-      width: 100%;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 2px;
-      color: var(--text);
-      font-family: 'DM Mono', monospace;
-      font-size: 0.78rem;
-      padding: 0.5rem 1rem 0.5rem 2.4rem;
-      outline: none;
-      transition: border-color .2s;
+      width: 100%; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 2px;
+      color: var(--text); font-family: 'DM Mono', monospace;
+      font-size: 0.78rem; padding: 0.5rem 1rem 0.5rem 2.4rem;
+      outline: none; transition: border-color .2s;
     }
     .search-wrap input:focus { border-color: var(--gold); }
     .search-wrap svg {
-      position: absolute;
-      left: 0.75rem; top: 50%;
-      transform: translateY(-50%);
-      color: var(--muted);
+      position: absolute; left: 0.75rem; top: 50%;
+      transform: translateY(-50%); color: var(--muted);
       pointer-events: none;
     }
-
-    .nav-right {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    /* Toggle mode PC/TV */
+    .nav-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
     .mode-toggle {
-      display: flex;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 2px;
+      display: flex; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 2px;
       overflow: hidden;
     }
     .mode-btn {
-      background: none;
-      border: none;
-      color: var(--muted);
-      font-family: 'DM Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.08em;
-      padding: 0.45rem 0.9rem;
-      cursor: pointer;
-      transition: all .2s;
-      display: flex;
-      align-items: center;
-      gap: 0.35rem;
+      background: none; border: none; color: var(--muted);
+      font-family: 'DM Mono', monospace; font-size: 0.7rem;
+      letter-spacing: 0.08em; padding: 0.45rem 0.9rem;
+      cursor: pointer; transition: all .2s;
+      display: flex; align-items: center; gap: 0.35rem;
     }
-    .mode-btn.active {
-      background: var(--gold);
-      color: #080a0e;
-    }
+    .mode-btn.active { background: var(--gold); color: #080a0e; }
     .mode-btn:hover:not(.active) { color: var(--text); }
-
     .btn-refresh {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-family: 'DM Mono', monospace;
-      font-size: 0.7rem;
-      padding: 0.4rem 0.8rem;
-      border-radius: 2px;
-      cursor: pointer;
-      transition: all .2s;
-      letter-spacing: 0.05em;
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); font-family: 'DM Mono', monospace;
+      font-size: 0.7rem; padding: 0.4rem 0.8rem;
+      border-radius: 2px; cursor: pointer;
+      transition: all .2s; letter-spacing: 0.05em;
     }
     .btn-refresh:hover { border-color: var(--gold); color: var(--gold); }
-
     google-cast-launcher {
       --connected-color: var(--gold);
       --disconnected-color: var(--muted);
-      width: 24px; height: 24px;
-      cursor: pointer;
+      width: 24px; height: 24px; cursor: pointer;
     }
 
-    /* ══════════════════════════════════════════════
-       HERO
-    ══════════════════════════════════════════════ */
+    /* ═══ HERO ═══════════════════════════════════════ */
     #hero {
-      height: 100vh;
-      display: flex;
-      align-items: flex-end;
-      padding: 0 3rem 5rem;
-      position: relative;
-      overflow: hidden;
+      height: 100vh; display: flex; align-items: flex-end;
+      padding: 0 3rem 5rem; position: relative; overflow: hidden;
     }
     #hero-bg {
-      position: absolute;
-      inset: 0;
-      background-size: cover;
-      background-position: center 20%;
+      position: absolute; inset: 0;
+      background-size: cover; background-position: center 20%;
       filter: blur(2px) brightness(0.35);
-      transform: scale(1.04);
-      transition: background-image 0.6s ease;
+      transform: scale(1.04); transition: background-image 0.6s ease;
     }
     #hero-grad {
-      position: absolute;
-      inset: 0;
+      position: absolute; inset: 0;
       background: linear-gradient(to right, rgba(8, 10, 14, 0.98) 0%, rgba(8, 10, 14, 0.6) 50%, transparent 100%),
                   linear-gradient(to top, rgba(8, 10, 14, 1) 0%, transparent 40%);
     }
     #hero-content { position: relative; max-width: 540px; }
     #hero-tag {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.15em;
-      color: var(--gold);
-      text-transform: uppercase;
-      margin-bottom: 0.75rem;
+      font-family: 'DM Mono', monospace; font-size: 0.7rem;
+      letter-spacing: 0.15em; color: var(--gold);
+      text-transform: uppercase; margin-bottom: 0.75rem;
     }
     #hero-title {
       font-family: 'Bebas Neue', sans-serif;
-      font-size: clamp(3rem, 6vw, 5.5rem);
-      line-height: 0.95;
-      letter-spacing: 0.04em;
-      color: #fff;
-      text-shadow: 0 2px 40px rgba(0, 0, 0, 0.8);
-      margin-bottom: 1rem;
+      font-size: clamp(3rem, 6vw, 5.5rem); line-height: 0.95;
+      letter-spacing: 0.04em; color: #fff;
+      text-shadow: 0 2px 40px rgba(0, 0, 0, 0.8); margin-bottom: 1rem;
     }
     #hero-meta {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.72rem;
-      color: var(--muted);
-      letter-spacing: 0.08em;
-      margin-bottom: 1.5rem;
+      font-family: 'DM Mono', monospace; font-size: 0.72rem;
+      color: var(--muted); letter-spacing: 0.08em; margin-bottom: 1.5rem;
     }
     .hero-btns { display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .btn-hero {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      border: none;
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1rem;
-      letter-spacing: 0.1em;
-      padding: 0.7rem 1.6rem;
-      cursor: pointer;
-      border-radius: 2px;
-      transition: all .2s;
+      display: flex; align-items: center; gap: 0.5rem;
+      border: none; font-family: 'Bebas Neue', sans-serif;
+      font-size: 1rem; letter-spacing: 0.1em;
+      padding: 0.7rem 1.6rem; cursor: pointer;
+      border-radius: 2px; transition: all .2s;
     }
     .btn-hero.primary { background: var(--gold); color: #080a0e; }
     .btn-hero.primary:hover { background: var(--gold2); transform: translateY(-1px); }
-    .btn-hero.secondary {
-      background: transparent;
-      color: var(--text);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-    }
-    .btn-hero.secondary:hover { border-color: var(--gold); color: var(--gold); }
 
-    /* ══════════════════════════════════════════════
-       CATALOGUE
-    ══════════════════════════════════════════════ */
-    #catalogue {
-      padding: 0 3rem 4rem;
-      position: relative;
-      z-index: 2;
-    }
-
+    /* ═══ CATALOGUE & CARDS ══════════════════════════ */
+    #catalogue { padding: 0 3rem 4rem; position: relative; z-index: 2; }
     .category-section { margin-bottom: 3rem; }
     .category-title {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.1rem;
-      letter-spacing: 0.15em;
-      color: var(--gold);
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
+      font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem;
+      letter-spacing: 0.15em; color: var(--gold);
+      margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem;
     }
-    .category-title::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: var(--border);
-    }
-    .category-count {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.6rem;
-      color: var(--muted);
-    }
-
+    .category-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .category-count { font-family: 'DM Mono', monospace; font-size: 0.6rem; color: var(--muted); }
     .movies-row {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr));
       gap: 1rem;
     }
-
-    /* ══════════════════════════════════════════════
-       CARDS
-    ══════════════════════════════════════════════ */
     .movie-card {
-      position: relative;
-      width: 100%;
-      aspect-ratio: 2/3;
-      border-radius: var(--radius);
-      overflow: hidden;
-      cursor: pointer;
-      background: var(--surface);
+      position: relative; width: 100%; aspect-ratio: 2/3;
+      border-radius: var(--radius); overflow: hidden;
+      cursor: pointer; background: var(--surface);
       transition: transform .3s cubic-bezier(.2, .8, .3, 1), box-shadow .3s;
       border: 1px solid var(--border);
     }
@@ -296,229 +162,201 @@
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--gold);
       z-index: 10;
     }
-
-    .card-thumb {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-      transition: filter .3s;
-    }
+    .card-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter .3s; }
     .movie-card:hover .card-thumb { filter: brightness(0.5); }
-
     .card-placeholder {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      width: 100%; height: 100%; display: flex;
+      flex-direction: column; align-items: center; justify-content: center;
       gap: 0.5rem;
       background: linear-gradient(135deg, var(--bg3), var(--surface));
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 3rem;
-      color: var(--muted);
-      padding: 0.5rem;
-      text-align: center;
+      font-family: 'Bebas Neue', sans-serif; font-size: 3rem;
+      color: var(--muted); padding: 0.5rem; text-align: center;
     }
-    .card-placeholder span {
-      font-size: 0.65rem;
-      font-family: 'DM Mono', monospace;
-    }
-
+    .card-placeholder span { font-size: 0.65rem; font-family: 'DM Mono', monospace; }
     .card-info {
-      position: absolute;
-      inset: 0;
-      padding: 1rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
+      position: absolute; inset: 0; padding: 1rem;
+      display: flex; flex-direction: column; justify-content: flex-end;
       background: linear-gradient(to top, rgba(8, 10, 14, 0.95) 0%, transparent 50%);
-      opacity: 0;
-      transition: opacity .3s;
+      opacity: 0; transition: opacity .3s;
     }
     .movie-card:hover .card-info { opacity: 1; }
-
     .card-title {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.05rem;
-      letter-spacing: 0.05em;
-      line-height: 1.1;
-      color: #fff;
+      font-family: 'Bebas Neue', sans-serif; font-size: 1.05rem;
+      letter-spacing: 0.05em; line-height: 1.1; color: #fff;
       margin-bottom: 0.25rem;
     }
-    .card-meta {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.62rem;
-      color: var(--muted);
-      letter-spacing: 0.05em;
-    }
-    .card-actions {
-      display: flex;
-      gap: 0.4rem;
-      margin-top: 0.5rem;
-    }
+    .card-meta { font-family: 'DM Mono', monospace; font-size: 0.62rem; color: var(--muted); letter-spacing: 0.05em; }
+    .card-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
     .card-btn {
-      flex: 1;
-      border: none;
-      padding: 0.4rem 0;
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 0.8rem;
-      letter-spacing: 0.08em;
-      border-radius: 2px;
-      cursor: pointer;
-      transition: filter .15s;
-      background: var(--gold);
-      color: #080a0e;
+      flex: 1; border: none; padding: 0.4rem 0;
+      font-family: 'Bebas Neue', sans-serif; font-size: 0.8rem;
+      letter-spacing: 0.08em; border-radius: 2px;
+      cursor: pointer; transition: filter .15s;
+      background: var(--gold); color: #080a0e;
     }
     .card-btn:hover { filter: brightness(1.15); }
-
     .card-badge {
-      position: absolute;
-      top: 0.5rem;
-      right: 0.5rem;
-      font-family: 'DM Mono', monospace;
-      font-size: 0.6rem;
-      background: rgba(0, 0, 0, 0.7);
-      border: 1px solid var(--border);
-      padding: 0.15rem 0.4rem;
-      border-radius: 2px;
-      color: var(--muted);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
+      position: absolute; top: 0.5rem; right: 0.5rem;
+      font-family: 'DM Mono', monospace; font-size: 0.6rem;
+      background: rgba(0, 0, 0, 0.7); border: 1px solid var(--border);
+      padding: 0.15rem 0.4rem; border-radius: 2px;
+      color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase;
     }
 
-    /* ══════════════════════════════════════════════
-       PLAYER MODAL (mode PC)
-    ══════════════════════════════════════════════ */
+    /* ═══ PLAYER MODAL ═══════════════════════════════ */
     #player-modal {
-      position: fixed;
-      inset: 0;
-      z-index: 200;
+      position: fixed; inset: 0; z-index: 200;
       background: rgba(0, 0, 0, 0.92);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity .3s;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity .3s;
     }
-    #player-modal.open {
-      opacity: 1;
-      pointer-events: all;
-    }
+    #player-modal.open { opacity: 1; pointer-events: all; }
     .player-container {
-      position: relative;
-      width: min(92vw, 1200px);
-      background: #000;
-      border-radius: 4px;
-      overflow: hidden;
+      position: relative; width: min(92vw, 1200px);
+      background: #000; border-radius: 4px; overflow: hidden;
       box-shadow: 0 40px 120px rgba(0, 0, 0, 0.9);
-      transform: scale(0.96);
-      transition: transform .3s;
+      transform: scale(0.96); transition: transform .3s;
     }
     #player-modal.open .player-container { transform: scale(1); }
-
     .player-header {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      z-index: 10;
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
       padding: 1rem 1.5rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      display: flex; align-items: center; justify-content: space-between;
       background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent);
     }
     .player-title {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.2rem;
-      letter-spacing: 0.08em;
-      color: #fff;
+      font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem;
+      letter-spacing: 0.08em; color: #fff;
     }
     .icon-btn {
       background: rgba(255, 255, 255, 0.1);
       border: 1px solid rgba(255, 255, 255, 0.2);
-      color: #fff;
-      width: 36px; height: 36px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: background .2s;
+      color: #fff; width: 36px; height: 36px;
+      border-radius: 50%; display: flex;
+      align-items: center; justify-content: center;
+      cursor: pointer; transition: background .2s;
     }
     .icon-btn:hover { background: rgba(255, 255, 255, 0.25); }
-
     #player-video {
-      width: 100%;
-      display: block;
-      aspect-ratio: 16/9;
-      background: #000;
+      width: 100%; display: block;
+      aspect-ratio: 16/9; background: #000;
     }
 
-    /* ══════════════════════════════════════════════
-       CAST STATUS (mode TV)
-    ══════════════════════════════════════════════ */
-    .cast-status-bar {
-      position: fixed;
-      bottom: 1.5rem;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 150;
-      background: var(--surface);
-      border: 1px solid var(--gold);
-      border-radius: 4px;
-      padding: 0.75rem 1.5rem;
-      display: none;
-      align-items: center;
-      gap: 0.75rem;
+    /* ─── Overlay de chargement ─── */
+    .player-loading {
+      position: absolute; inset: 0;
+      background: rgba(0, 0, 0, 0.92);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 1.5rem; z-index: 5;
+      transition: opacity 0.4s ease;
+    }
+    .player-loading.hidden {
+      opacity: 0; pointer-events: none;
+    }
+    .loading-spinner {
+      width: 56px; height: 56px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: var(--gold);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .loading-text {
       font-family: 'DM Mono', monospace;
-      font-size: 0.75rem;
-      color: var(--gold);
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      font-size: 0.85rem;
+      color: var(--text);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .loading-substep {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-align: center;
+      max-width: 400px;
+    }
+    .loading-steps {
+      display: flex; gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .loading-step {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+      transition: background 0.3s;
+    }
+    .loading-step.active { background: var(--gold); }
+    .loading-step.done { background: rgba(201, 168, 76, 0.5); }
+
+    /* ─── Sélecteur de piste audio ─── */
+    .audio-selector {
+      position: absolute; bottom: 60px; right: 1rem;
+      z-index: 11; display: none; gap: 0.4rem;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid var(--border);
+      padding: 0.5rem; border-radius: 4px;
+      flex-wrap: wrap; max-width: 320px;
+    }
+    .audio-selector.visible { display: flex; }
+    .audio-selector-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem; color: var(--gold);
+      letter-spacing: 0.08em; width: 100%;
+      margin-bottom: 0.25rem;
+    }
+    .audio-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff; padding: 0.3rem 0.6rem;
+      font-size: 0.75rem; cursor: pointer;
+      border-radius: 2px; font-family: 'DM Mono', monospace;
+      transition: all .15s;
+    }
+    .audio-btn:hover { background: rgba(255, 255, 255, 0.2); }
+    .audio-btn.active {
+      background: var(--gold); color: #080a0e;
+      border-color: var(--gold);
+    }
+
+    /* ═══ CAST STATUS ════════════════════════════════ */
+    .cast-status-bar {
+      position: fixed; bottom: 1.5rem; left: 50%;
+      transform: translateX(-50%); z-index: 150;
+      background: var(--surface); border: 1px solid var(--gold);
+      border-radius: 4px; padding: 0.75rem 1.5rem;
+      display: none; align-items: center; gap: 0.75rem;
+      font-family: 'DM Mono', monospace; font-size: 0.75rem;
+      color: var(--gold); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     }
     .cast-status-bar.visible { display: flex; }
     .cast-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--gold);
-      animation: pulse 1.5s infinite;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--gold); animation: pulse 1.5s infinite;
     }
     @keyframes pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50%      { opacity: 0.4; transform: scale(0.7); }
     }
 
-    /* ══════════════════════════════════════════════
-       STATES
-    ══════════════════════════════════════════════ */
     #loading, #empty {
-      padding: 8rem 3rem;
-      text-align: center;
-      font-family: 'DM Mono', monospace;
-      font-size: 0.8rem;
-      color: var(--muted);
-      letter-spacing: 0.08em;
+      padding: 8rem 3rem; text-align: center;
+      font-family: 'DM Mono', monospace; font-size: 0.8rem;
+      color: var(--muted); letter-spacing: 0.08em;
     }
     .spinner {
       width: 32px; height: 32px;
-      border: 2px solid var(--border);
-      border-top-color: var(--gold);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      border: 2px solid var(--border); border-top-color: var(--gold);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
       margin: 0 auto 1rem;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Scroll custom */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: var(--bg); }
     ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
 
-    /* ══════════════════════════════════════════════
-       RESPONSIVE
-    ══════════════════════════════════════════════ */
     @media (max-width: 768px) {
       nav { padding: 0 1rem; gap: 1rem; }
       #hero { padding: 0 1.2rem 4rem; }
@@ -528,179 +366,101 @@
       .mode-btn { padding: 0.4rem 0.6rem; font-size: 0.65rem; }
     }
 
-    /* ══════════════════════════════════════════════
-      SERIES MODAL
-    ══════════════════════════════════════════════ */
+    /* ═══ SERIES MODAL ═══════════════════════════════ */
     #series-modal {
-      position: fixed;
-      inset: 0;
-      z-index: 200;
+      position: fixed; inset: 0; z-index: 200;
       background: rgba(0, 0, 0, 0.92);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity .3s;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity .3s;
       padding: 2rem;
     }
     #series-modal.open { opacity: 1; pointer-events: all; }
-
     .series-container {
-      width: min(95vw, 1100px);
-      max-height: 90vh;
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      transform: scale(0.96);
-      transition: transform .3s;
+      width: min(95vw, 1100px); max-height: 90vh;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 6px; overflow: hidden;
+      display: flex; flex-direction: column;
+      transform: scale(0.96); transition: transform .3s;
     }
     #series-modal.open .series-container { transform: scale(1); }
-
     .series-header {
-      position: relative;
-      padding: 2rem;
-      background-size: cover;
-      background-position: center 20%;
+      position: relative; padding: 2rem;
+      background-size: cover; background-position: center 20%;
       border-bottom: 1px solid var(--border);
-      min-height: 220px;
-      display: flex;
-      align-items: flex-end;
+      min-height: 220px; display: flex; align-items: flex-end;
     }
     .series-header::before {
-      content: '';
-      position: absolute;
-      inset: 0;
+      content: ''; position: absolute; inset: 0;
       background: linear-gradient(to top, var(--bg2) 0%, rgba(14, 17, 23, 0.4) 100%);
     }
     .series-header-content { position: relative; z-index: 1; flex: 1; }
     .series-modal-title {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 2.5rem;
-      letter-spacing: 0.04em;
-      color: #fff;
-      margin-bottom: 0.5rem;
+      font-family: 'Bebas Neue', sans-serif; font-size: 2.5rem;
+      letter-spacing: 0.04em; color: #fff; margin-bottom: 0.5rem;
     }
     .series-meta {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.7rem;
-      color: var(--gold);
-      letter-spacing: 0.08em;
-      margin-bottom: 0.75rem;
+      font-family: 'DM Mono', monospace; font-size: 0.7rem;
+      color: var(--gold); letter-spacing: 0.08em; margin-bottom: 0.75rem;
     }
     .series-overview {
-      font-family: 'Crimson Pro', serif;
-      font-size: 0.9rem;
-      color: var(--text);
-      max-width: 700px;
-      line-height: 1.4;
+      font-family: 'Crimson Pro', serif; font-size: 0.9rem;
+      color: var(--text); max-width: 700px; line-height: 1.4;
     }
-    .series-close {
-      position: absolute;
-      top: 1rem; right: 1rem;
-      z-index: 2;
-    }
-
+    .series-close { position: absolute; top: 1rem; right: 1rem; z-index: 2; }
     .season-tabs {
-      display: flex;
-      gap: 0.5rem;
+      display: flex; gap: 0.5rem;
       padding: 1rem 2rem 0;
-      border-bottom: 1px solid var(--border);
-      overflow-x: auto;
+      border-bottom: 1px solid var(--border); overflow-x: auto;
     }
     .season-tab {
-      background: none;
-      border: none;
-      color: var(--muted);
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 0.95rem;
-      letter-spacing: 0.1em;
-      padding: 0.6rem 1rem;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all .2s;
-      white-space: nowrap;
+      background: none; border: none; color: var(--muted);
+      font-family: 'Bebas Neue', sans-serif; font-size: 0.95rem;
+      letter-spacing: 0.1em; padding: 0.6rem 1rem;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: all .2s; white-space: nowrap;
     }
     .season-tab:hover { color: var(--text); }
-    .season-tab.active {
-      color: var(--gold);
-      border-bottom-color: var(--gold);
-    }
-
-    .episodes-list {
-      overflow-y: auto;
-      padding: 1rem 2rem 2rem;
-      flex: 1;
-    }
+    .season-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+    .episodes-list { overflow-y: auto; padding: 1rem 2rem 2rem; flex: 1; }
     .episode-row {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      padding: 0.85rem 1rem;
-      border-bottom: 1px solid var(--border);
-      cursor: pointer;
-      transition: background .15s;
-      border-radius: 3px;
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.85rem 1rem; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background .15s; border-radius: 3px;
     }
     .episode-row:hover { background: var(--surface); }
     .episode-num {
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 1.4rem;
-      color: var(--gold);
-      min-width: 50px;
-      letter-spacing: 0.05em;
+      font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem;
+      color: var(--gold); min-width: 50px; letter-spacing: 0.05em;
     }
     .episode-info { flex: 1; }
     .episode-title {
-      font-family: 'Crimson Pro', serif;
-      font-size: 1rem;
-      color: var(--text);
-      margin-bottom: 0.2rem;
+      font-family: 'Crimson Pro', serif; font-size: 1rem;
+      color: var(--text); margin-bottom: 0.2rem;
     }
     .episode-meta {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.65rem;
-      color: var(--muted);
-      letter-spacing: 0.05em;
+      font-family: 'DM Mono', monospace; font-size: 0.65rem;
+      color: var(--muted); letter-spacing: 0.05em;
     }
     .episode-play {
-      background: var(--gold);
-      color: #080a0e;
-      border: none;
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 0.8rem;
-      letter-spacing: 0.1em;
-      padding: 0.4rem 1rem;
-      cursor: pointer;
-      border-radius: 2px;
-      transition: filter .15s;
+      background: var(--gold); color: #080a0e; border: none;
+      font-family: 'Bebas Neue', sans-serif; font-size: 0.8rem;
+      letter-spacing: 0.1em; padding: 0.4rem 1rem;
+      cursor: pointer; border-radius: 2px; transition: filter .15s;
     }
     .episode-play:hover { filter: brightness(1.15); }
-
     .series-badge {
-      position: absolute;
-      bottom: 0.5rem;
-      left: 0.5rem;
-      background: var(--gold);
-      color: #080a0e;
-      font-family: 'Bebas Neue', sans-serif;
-      font-size: 0.7rem;
-      letter-spacing: 0.08em;
-      padding: 0.2rem 0.5rem;
-      border-radius: 2px;
+      position: absolute; bottom: 0.5rem; left: 0.5rem;
+      background: var(--gold); color: #080a0e;
+      font-family: 'Bebas Neue', sans-serif; font-size: 0.7rem;
+      letter-spacing: 0.08em; padding: 0.2rem 0.5rem; border-radius: 2px;
     }
   </style>
 </head>
 
 <body>
 
-  <!-- ═══ NAVIGATION ═══════════════════════════════════════════════════════ -->
   <nav>
     <a class="logo" href="#">CINE<span>LOCAL</span></a>
-
     <div class="search-wrap">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <circle cx="11" cy="11" r="8" />
@@ -708,12 +468,11 @@
       </svg>
       <input type="text" id="search" placeholder="Rechercher un film…" autocomplete="off" />
     </div>
-
     <div class="nav-right">
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc" onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn" data-mode="tv" onclick="setMode('tv')">📺</button>
-  	<button class="mode-btn" data-mode="local" onclick="setMode('local')">📽️ TV directe</button>
+        <button class="mode-btn" data-mode="local" onclick="setMode('local')">📽️ TV directe</button>
       </div>
       <div class="mode-toggle" id="langToggle">
         <button class="mode-btn active" data-lang="all" onclick="setLang('all')">Tout</button>
@@ -727,11 +486,10 @@
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
-	<button class="btn-refresh" onclick="fetch('/stop', {method: 'POST'})">⏹ Stop TV</button>
+      <button class="btn-refresh" onclick="fetch('/stop', {method: 'POST'})">⏹ Stop TV</button>
     </div>
   </nav>
 
-  <!-- ═══ HERO ═════════════════════════════════════════════════════════════ -->
   <section id="hero">
     <div id="hero-bg"></div>
     <div id="hero-grad"></div>
@@ -750,17 +508,13 @@
     </div>
   </section>
 
-  <!-- ═══ CATALOGUE ════════════════════════════════════════════════════════ -->
   <main id="catalogue">
-    <div id="loading">
-      <div class="spinner"></div>
-      Chargement de la bibliothèque…
-    </div>
+    <div id="loading"><div class="spinner"></div>Chargement de la bibliothèque…</div>
     <div id="empty" style="display:none">Aucun film trouvé dans ~/nvme_data</div>
     <div id="movies-container"></div>
   </main>
 
-  <!-- ═══ PLAYER MODAL (mode PC uniquement) ════════════════════════════════ -->
+  <!-- ═══ PLAYER MODAL ═══════════════════════════════════════════════════ -->
   <div id="player-modal">
     <div class="player-container">
       <div class="player-header">
@@ -772,11 +526,27 @@
           </svg>
         </button>
       </div>
-      <video id="player-video" controls preload="auto"></video>
+      <video id="player-video" controls preload="auto" crossorigin="anonymous"></video>
+      
+      <!-- Overlay de chargement -->
+      <div class="player-loading" id="playerLoading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loadingText">Préparation du film…</div>
+        <div class="loading-substep" id="loadingSubstep">Chargement de la vidéo et extraction des pistes</div>
+        <div class="loading-steps">
+          <div class="loading-step" id="stepVideo"></div>
+          <div class="loading-step" id="stepTracks"></div>
+        </div>
+      </div>
+      
+      <!-- Sélecteur de piste audio -->
+      <div class="audio-selector" id="audioSelector">
+        <div class="audio-selector-label">▣ PISTE AUDIO</div>
+      </div>
     </div>
   </div>
 
-  <!-- ═══ SERIES MODAL ═════════════════════════════════════════════════════ -->
+  <!-- ═══ SERIES MODAL ═══════════════════════════════════════════════════ -->
   <div id="series-modal">
     <div class="series-container">
       <div class="series-header" id="seriesHeader">
@@ -797,43 +567,40 @@
     </div>
   </div>
 
-  <!-- ═══ CAST STATUS (mode TV uniquement) ═════════════════════════════════ -->
   <div class="cast-status-bar" id="castStatus">
     <div class="cast-dot"></div>
     <span id="castStatusText">Diffusion en cours sur la TV</span>
   </div>
 
-  <!-- ═══ SCRIPT ════════════════════════════════════════════════════════════ -->
   <script>
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // ÉTAT GLOBAL
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     let allMovies = [];
     let currentMovie = null;
     let castSession = null;
     let castAvailable = false;
-    let currentMode = localStorage.getItem('cinelocal-mode') || 'pc';
     let castSdkLoaded = false;
+    let currentMode = localStorage.getItem('cinelocal-mode') || 'pc';
     let currentLang = localStorage.getItem('cinelocal-lang') || 'all';
     let currentKind = localStorage.getItem('cinelocal-kind') || 'all';
+    let currentSeries = null;
+    let currentSeason = null;
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // GESTION DU MODE PC/TV
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // MODES & FILTRES
+    // ══════════════════════════════════════════════════════════════════════
     function setMode(mode) {
       currentMode = mode;
       localStorage.setItem('cinelocal-mode', mode);
-
       document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === mode);
       });
-
       document.getElementById('castBtn').style.display = (mode === 'tv') ? '' : 'none';
-      document.getElementById('heroPrimaryLabel').textContent = (mode === 'tv') ? 'CASTER' : 'LIRE';
-
+      document.getElementById('heroPrimaryLabel').textContent =
+        (mode === 'tv') ? 'CASTER' : (mode === 'local' ? 'TV DIRECTE' : 'LIRE');
       if (mode === 'tv' && !castSdkLoaded) loadCastSdk();
-      if (mode === 'tv') closePlayer();
-
+      if (mode !== 'pc') closePlayer();
       if (allMovies.length) applyFilters();
     }
 
@@ -858,18 +625,9 @@
     function applyFilters() {
       const searchInput = document.getElementById('search');
       const q = searchInput ? searchInput.value.toLowerCase().trim() : '';
-      
       let filtered = allMovies;
-      
-      // Filtre par device selon le mode (PC ne voit que les _PC, TV ne voit que les _TV)
-//      filtered = filtered.filter(m => m.device === currentMode);
-      
-      if (currentLang !== 'all') {
-        filtered = filtered.filter(m => m.lang === currentLang);
-      }
-      if (currentKind !== 'all') {
-        filtered = filtered.filter(m => m.kind === currentKind);
-      }
+      if (currentLang !== 'all') filtered = filtered.filter(m => m.lang === currentLang);
+      if (currentKind !== 'all') filtered = filtered.filter(m => m.kind === currentKind);
       if (q) {
         filtered = filtered.filter(m =>
           m.title.toLowerCase().includes(q) ||
@@ -880,20 +638,17 @@
       renderMovies(filtered);
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // CHROMECAST SDK (chargé à la demande)
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // CHROMECAST
+    // ══════════════════════════════════════════════════════════════════════
     window['__onGCastApiAvailable'] = (isAvailable) => {
       castAvailable = isAvailable;
-      console.log('[Cast] API available:', isAvailable);
       if (!isAvailable) return;
-
       const ctx = cast.framework.CastContext.getInstance();
       ctx.setOptions({
         receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
         autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
       });
-
       ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
         const s = e.sessionState;
         const S = cast.framework.SessionState;
@@ -918,27 +673,18 @@
 
     function loadMediaOnCast(movie) {
       if (!castSession) return;
-
-      const mimeMap = {
-        '.mp4':  'video/mp4',
-        '.mkv':  'video/x-matroska',
-        '.webm': 'video/webm',
-      };
+      const mimeMap = { '.mp4': 'video/mp4', '.mkv': 'video/x-matroska', '.webm': 'video/webm' };
       const mime = mimeMap[movie.ext] || 'video/mp4';
-
       const mediaInfo = new chrome.cast.media.MediaInfo(
-        `${window.location.origin}/cast/${movie.id}`,
-        mime
+        `${window.location.origin}/cast/${movie.id}`, mime
       );
       mediaInfo.metadata = new chrome.cast.media.MovieMediaMetadata();
       mediaInfo.metadata.title = movie.title;
       if (movie.year) mediaInfo.metadata.releaseDate = movie.year;
       if (movie.poster) mediaInfo.metadata.images = [new chrome.cast.Image(movie.poster)];
-
       const req = new chrome.cast.media.LoadRequest(mediaInfo);
       castSession.loadMedia(req)
         .then(() => {
-          console.log('[Cast] Lecture démarrée :', movie.title);
           document.getElementById('castStatusText').textContent = `▶ ${movie.title}`;
         })
         .catch(e => console.error('[Cast] Erreur :', e));
@@ -950,79 +696,204 @@
         return;
       }
       currentMovie = movie;
-      if (castSession) {
-        loadMediaOnCast(movie);
-      } else {
-        // Ouvre le dialogue natif de sélection du Chromecast
-        document.getElementById('castBtn').click();
-      }
+      if (castSession) loadMediaOnCast(movie);
+      else document.getElementById('castBtn').click();
     }
 
-function playLocalDirect(movie) {
-  fetch(`/play/${movie.id}`, { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.status === 'ok') {
-        // Affiche un toast "Lecture sur la TV"
-        alert(`▶ Lecture lancée sur la TV : ${data.playing}`);
+    function playLocalDirect(movie) {
+      fetch(`/play/${movie.id}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'ok') {
+            alert(`▶ Lecture lancée sur la TV : ${data.playing}`);
+          }
+        })
+        .catch(e => alert('Erreur: ' + e));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // LECTURE PC AVEC LOADING BLOQUANT
+    // ══════════════════════════════════════════════════════════════════════
+    function langToLabel(code) {
+      const map = {
+        'fre': '🇫🇷 Français', 'fra': '🇫🇷 Français', 'fr': '🇫🇷 Français',
+        'eng': '🇬🇧 English',  'en': '🇬🇧 English',
+        'spa': '🇪🇸 Español',
+        'ger': '🇩🇪 Deutsch', 'deu': '🇩🇪 Deutsch',
+        'ita': '🇮🇹 Italiano',
+        'jpn': '🇯🇵 日本語',
+        '': 'Inconnue', 'und': 'Inconnue',
+      };
+      return map[(code || '').toLowerCase()] || (code || '').toUpperCase();
+    }
+
+    // Configure les pistes audio via l'API native HTML5 (Chrome)
+    function setupAudioTracksNative() {
+      const video = document.getElementById('player-video');
+      const selector = document.getElementById('audioSelector');
+      selector.querySelectorAll('.audio-btn').forEach(b => b.remove());
+
+      const tracks = video.audioTracks;
+      if (!tracks || tracks.length <= 1) {
+        selector.classList.remove('visible');
+        return;
       }
-    })
-    .catch(e => alert('Erreur: ' + e));
-}
 
-// Modifie playMovie pour gérer le mode "local"
-function playMovie(id) {
-  const m = allMovies.find(x => x.id === id);
-  if (!m) return;
-  
-  if (currentMode === 'local')      playLocalDirect(m);
-  else if (currentMode === 'tv')    startCast(m);
-  else                              playLocal(m);
-}
+      selector.classList.add('visible');
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        const btn = document.createElement('button');
+        btn.className = 'audio-btn' + (track.enabled ? ' active' : '');
+        const label = track.label || langToLabel(track.language) || `Piste ${i + 1}`;
+        btn.textContent = label;
+        btn.onclick = () => {
+          for (let j = 0; j < tracks.length; j++) {
+            tracks[j].enabled = (j === i);
+          }
+          document.querySelectorAll('.audio-btn').forEach((b, idx) => {
+            b.classList.toggle('active', idx === i);
+          });
+        };
+        selector.appendChild(btn);
+      }
+      console.log(`[Audio] ${tracks.length} pistes détectées`);
+    }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // LECTURE PC
-    // ══════════════════════════════════════════════════════════════════════════
-    function playLocal(movie) {
+    // Attache les sous-titres (depuis l'API serveur)
+    function attachSubtitleTracks(video, subtitleTracks) {
+      video.querySelectorAll('track').forEach(t => t.remove());
+      subtitleTracks.forEach((sub) => {
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.src = sub.url;
+        track.srclang = sub.language;
+        track.label = sub.label;
+        video.appendChild(track);
+      });
+      // Désactive l'auto-affichage : l'utilisateur active via le bouton CC
+      setTimeout(() => {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          video.textTracks[i].mode = 'disabled';
+        }
+      }, 100);
+    }
+
+    // Met à jour l'overlay de chargement
+    function setLoadingState(text, substep, videoDone, tracksDone) {
+      document.getElementById('loadingText').textContent = text;
+      document.getElementById('loadingSubstep').textContent = substep;
+      const stepVideo = document.getElementById('stepVideo');
+      const stepTracks = document.getElementById('stepTracks');
+      stepVideo.className = 'loading-step' + (videoDone ? ' done' : ' active');
+      stepTracks.className = 'loading-step' + (tracksDone ? ' done' : (videoDone ? ' active' : ''));
+    }
+
+    async function playLocal(movie) {
       currentMovie = movie;
       const video = document.getElementById('player-video');
       const modal = document.getElementById('player-modal');
+      const loading = document.getElementById('playerLoading');
+
       document.getElementById('player-title').textContent = movie.title;
 
-      video.src = `/stream/${movie.id}`;
-      video.preload = 'auto';   // ← force le préchargement
-      video.load();
+      // Reset complet de l'UI
+      loading.classList.remove('hidden');
+      setLoadingState('Préparation du film…', 'Chargement de la vidéo et extraction des pistes', false, false);
       
-      // Hint au navigateur : "garde 5 minutes d'avance en buffer"
-      video.addEventListener('progress', () => {
-        if (video.buffered.length > 0) {
-          const buffered = video.buffered.end(video.buffered.length - 1);
-          const current = video.currentTime;
-          const ahead = buffered - current;
-          console.log(`Buffer : ${Math.round(ahead)}s d'avance`);
-        }
-      });
-      
-      video.play().catch(() => {});
+      const selector = document.getElementById('audioSelector');
+      selector.classList.remove('visible');
+      selector.querySelectorAll('.audio-btn').forEach(b => b.remove());
+      video.querySelectorAll('track').forEach(t => t.remove());
+
       modal.classList.add('open');
       document.body.style.overflow = 'hidden';
+
+      const movieId = movie.id;
+      let videoReady = false;
+      let tracksReady = false;
+
+      // ─── Promesse 1 : la vidéo est chargée (loadedmetadata) ───
+      const videoPromise = new Promise((resolve, reject) => {
+        const onLoaded = () => {
+          videoReady = true;
+          setLoadingState(
+            tracksReady ? 'Prêt' : 'Préparation des sous-titres…',
+            tracksReady ? 'Démarrage de la lecture' : 'Extraction en cours (peut prendre quelques secondes)',
+            true, tracksReady
+          );
+          resolve();
+        };
+        const onError = () => reject(new Error('Échec du chargement vidéo'));
+        video.addEventListener('loadedmetadata', onLoaded, { once: true });
+        video.addEventListener('error', onError, { once: true });
+        video.src = `/stream/${movieId}`;
+        video.preload = 'auto';
+        video.load();
+      });
+
+      // ─── Promesse 2 : les sous-titres sont extraits ───
+      const tracksPromise = fetch(`/api/tracks/${movieId}`)
+        .then(r => r.json())
+        .then(data => {
+          tracksReady = true;
+          setLoadingState(
+            videoReady ? 'Prêt' : 'Chargement de la vidéo…',
+            videoReady ? 'Démarrage de la lecture' : 'Vidéo en cours de chargement',
+            videoReady, true
+          );
+          return data;
+        })
+        .catch(e => {
+          console.warn('[Tracks] Erreur :', e);
+          tracksReady = true;
+          return { audio_tracks: [], subtitle_tracks: [] };
+        });
+
+      // ─── Attente des DEUX en parallèle ───
+      try {
+        const [_, tracks] = await Promise.all([videoPromise, tracksPromise]);
+
+        // Vérifie que l'utilisateur n'a pas fermé / changé de film
+        if (currentMovie?.id !== movieId) return;
+
+        // Pistes audio via API native Chrome
+        setupAudioTracksNative();
+
+        // Sous-titres depuis le cache serveur
+        attachSubtitleTracks(video, tracks.subtitle_tracks);
+
+        // Tout est prêt → démarre la lecture
+        setLoadingState('Prêt !', 'Démarrage…', true, true);
+        await new Promise(r => setTimeout(r, 200));  // petit delay visuel
+        loading.classList.add('hidden');
+        video.play().catch(() => {});
+
+      } catch (e) {
+        console.error('Erreur chargement:', e);
+        setLoadingState('Erreur', e.message || 'Impossible de charger le film', true, true);
+      }
     }
 
     function closePlayer() {
       const video = document.getElementById('player-video');
       video.pause();
       video.src = '';
+      video.querySelectorAll('track').forEach(t => t.remove());
       document.getElementById('player-modal').classList.remove('open');
+      document.getElementById('audioSelector').classList.remove('visible');
+      document.getElementById('playerLoading').classList.remove('hidden');
       document.body.style.overflow = '';
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // ACTIONS UNIFIÉES (utilisent le mode courant)
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // ACTIONS
+    // ══════════════════════════════════════════════════════════════════════
     function playMovie(id) {
       const m = allMovies.find(x => x.id === id);
       if (!m) return;
-      currentMode === 'tv' ? startCast(m) : playLocal(m);
+      if (currentMode === 'local')      playLocalDirect(m);
+      else if (currentMode === 'tv')    startCast(m);
+      else                              playLocal(m);
     }
 
     function openMovie(id) {
@@ -1034,32 +905,26 @@ function playMovie(id) {
       if (currentMovie) playMovie(currentMovie.id);
     }
 
-    let currentSeries = null;
-    let currentSeason = null;
-
+    // ══════════════════════════════════════════════════════════════════════
+    // SÉRIES
+    // ══════════════════════════════════════════════════════════════════════
     function openSeries(seriesId) {
       const series = allMovies.find(x => x.id === seriesId && x.kind === 'series');
       if (!series) return;
       currentSeries = series;
-
-      // Header
       document.getElementById('seriesModalTitle').textContent = series.title;
       document.getElementById('seriesModalMeta').textContent =
         `${series.season_count} saison${series.season_count > 1 ? 's' : ''} · ${series.episode_count} épisodes · ${series.lang.toUpperCase()}`;
       document.getElementById('seriesModalOverview').textContent = series.overview || '';
-
       const headerBg = series.backdrop || series.poster;
       document.getElementById('seriesHeader').style.backgroundImage =
         headerBg ? `url(${headerBg})` : 'linear-gradient(135deg, var(--bg3), var(--surface))';
-
-      // Onglets de saisons
       const seasons = [...new Set(series.episodes.map(e => e.season))].sort((a, b) => a - b);
       currentSeason = seasons[0];
       document.getElementById('seasonTabs').innerHTML = seasons.map(s => `
         <button class="season-tab ${s === currentSeason ? 'active' : ''}"
                 onclick="selectSeason(${s})">Saison ${s.toString().padStart(2, '0')}</button>
       `).join('');
-
       renderEpisodes();
       document.getElementById('series-modal').classList.add('open');
       document.body.style.overflow = 'hidden';
@@ -1076,8 +941,7 @@ function playMovie(id) {
     function renderEpisodes() {
       if (!currentSeries) return;
       const eps = currentSeries.episodes.filter(e => e.season === currentSeason);
-      const btnLabel = currentMode === 'tv' ? '📺 Caster' : '▶ Lire';
-
+      const btnLabel = currentMode === 'tv' ? '📺 Caster' : (currentMode === 'local' ? '📽️ TV' : '▶ Lire');
       document.getElementById('episodesList').innerHTML = eps.map(ep => `
         <div class="episode-row" onclick="playEpisode('${ep.id}')">
           <div class="episode-num">E${ep.episode.toString().padStart(2, '0')}</div>
@@ -1094,22 +958,16 @@ function playMovie(id) {
       if (!currentSeries) return;
       const ep = currentSeries.episodes.find(e => e.id === episodeId);
       if (!ep) return;
-      
-      // Construit un objet "movie-like" pour réutiliser playMovie/startCast
       const fakeMovie = {
         ...ep,
-        title: `${currentSeries.title} - S${ep.season.toString().padStart(2,'0')}E${ep.episode.toString().padStart(2,'0')}`,
+        title: `${currentSeries.title} - S${ep.season.toString().padStart(2, '0')}E${ep.episode.toString().padStart(2, '0')}`,
         year: null,
         poster: currentSeries.poster,
       };
-      
-      if (currentMode === 'tv') {
-        closeSeriesModal();
-        startCast(fakeMovie);
-      } else {
-        closeSeriesModal();
-        playLocal(fakeMovie);
-      }
+      closeSeriesModal();
+      if (currentMode === 'tv')        startCast(fakeMovie);
+      else if (currentMode === 'local') playLocalDirect(fakeMovie);
+      else                              playLocal(fakeMovie);
     }
 
     function closeSeriesModal() {
@@ -1117,25 +975,14 @@ function playMovie(id) {
       document.body.style.overflow = '';
     }
 
-    document.getElementById('series-modal').addEventListener('click', (e) => {
-      if (e.target === document.getElementById('series-modal')) closeSeriesModal();
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        closePlayer();
-        closeSeriesModal();
-      }
-    });
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // CHARGEMENT ET RENDU
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // CHARGEMENT & RENDU
+    // ══════════════════════════════════════════════════════════════════════
     async function loadMovies() {
       try {
         const r = await fetch('/api/movies');
         allMovies = await r.json();
-        renderMovies(allMovies);
+        applyFilters();
         if (allMovies.length > 0) {
           const featured = allMovies[Math.floor(Math.random() * Math.min(allMovies.length, 10))];
           setHero(featured);
@@ -1157,28 +1004,18 @@ function playMovie(id) {
       document.getElementById('loading').style.display = 'none';
       const container = document.getElementById('movies-container');
       container.style.display = '';
-
       if (movies.length === 0) {
         document.getElementById('empty').style.display = 'block';
         container.innerHTML = '';
         return;
       }
       document.getElementById('empty').style.display = 'none';
-
       const byCategory = {};
-      movies.forEach(m => {
-        (byCategory[m.category] = byCategory[m.category] || []).push(m);
-      });
-
+      movies.forEach(m => { (byCategory[m.category] = byCategory[m.category] || []).push(m); });
       container.innerHTML = Object.entries(byCategory).map(([cat, films]) => `
         <section class="category-section">
-          <div class="category-title">
-            ${cat}
-            <span class="category-count">${films.length} titres</span>
-          </div>
-          <div class="movies-row">
-            ${films.map(movieCard).join('')}
-          </div>
+          <div class="category-title">${cat}<span class="category-count">${films.length} titres</span></div>
+          <div class="movies-row">${films.map(movieCard).join('')}</div>
         </section>
       `).join('');
     }
@@ -1186,33 +1023,22 @@ function playMovie(id) {
     function movieCard(m) {
       const ext = m.ext.replace('.', '').toUpperCase();
       const isSeries = m.kind === 'series';
-      const btnLabel = currentMode === 'tv' ? '📺 Caster' : '▶ Lire';
-      
+      const btnLabel = currentMode === 'tv' ? '📺 Caster' : (currentMode === 'local' ? '📽️ TV' : '▶ Lire');
       const meta = isSeries
         ? `${m.season_count} saison${m.season_count > 1 ? 's' : ''} · ${m.episode_count} ép.`
         : `${m.year || ''} · ${m.size_mb} Mo`;
-      
       const action = isSeries
         ? `event.stopPropagation();openSeries('${m.id}')`
         : `event.stopPropagation();playMovie('${m.id}')`;
-
-      const cardClick = isSeries
-        ? `openSeries('${m.id}')`
-        : `openMovie('${m.id}')`;
-      
+      const cardClick = isSeries ? `openSeries('${m.id}')` : `openMovie('${m.id}')`;
       const actionLabel = isSeries ? '📂 Voir épisodes' : btnLabel;
-
       const poster = m.poster
         ? `<img class="card-thumb" src="${m.poster}" alt="${escHtml(m.title)}" loading="lazy"
                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />`
         : '';
-
       const seriesBadge = isSeries ? `<div class="series-badge">SÉRIE</div>` : '';
-
       return `
-        <div class="movie-card"
-            onclick="${cardClick}"
-            onmouseenter="previewHero('${m.id}')">
+        <div class="movie-card" onclick="${cardClick}" onmouseenter="previewHero('${m.id}')">
           ${poster}
           <div class="card-placeholder" style="display:${m.poster ? 'none' : 'flex'}">
             ${isSeries ? '📺' : '🎬'}<span>${escHtml(m.title.substring(0, 30))}</span>
@@ -1230,9 +1056,9 @@ function playMovie(id) {
       `;
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // HERO
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     let heroTimeout;
     function previewHero(id) {
       clearTimeout(heroTimeout);
@@ -1249,7 +1075,6 @@ function playMovie(id) {
         [m.year, m.category !== 'Films' ? m.category : '', `${m.size_mb} Mo`]
           .filter(Boolean).join(' · ');
       document.getElementById('hero-tag').textContent = m.category;
-
       const bg = m.backdrop || m.poster;
       if (bg) {
         const img = new Image();
@@ -1262,30 +1087,32 @@ function playMovie(id) {
       }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // RECHERCHE
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // ÉVÉNEMENTS
+    // ══════════════════════════════════════════════════════════════════════
     document.getElementById('search').addEventListener('input', applyFilters);
 
-    // Fermer le player en cliquant sur l'overlay ou avec Échap
     document.getElementById('player-modal').addEventListener('click', (e) => {
       if (e.target === document.getElementById('player-modal')) closePlayer();
     });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closePlayer();
+
+    document.getElementById('series-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('series-modal')) closeSeriesModal();
     });
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // UTILS
-    // ══════════════════════════════════════════════════════════════════════════
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closePlayer();
+        closeSeriesModal();
+      }
+    });
+
     function escHtml(s) {
       return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
               .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // INITIALISATION
-    // ══════════════════════════════════════════════════════════════════════════
+    // INIT
     setMode(currentMode);
     setLang(currentLang);
     setKind(currentKind);

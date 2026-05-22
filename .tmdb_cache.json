@@ -176,5 +176,32 @@
   "Shingeki No Kyojin - Oade06 - Lost Girls Wall Sina, Goodbye Part 1|": null,
   "Shingeki No Kyojin - Oade04 - No Regrets Part 1|": null,
   "Shingeki No Kyojin - The Final Season - S04P03 - The Final Chapters - 1|": null,
-  "Shingeki No Kyojin - The Final Season - S04P04 - The Final Chapters - 2|": null
+  "Shingeki No Kyojin - The Final Season - S04P04 - The Final Chapters - 2|": null,
+  "Shingeki No Kyojin - S04P04 - The Final Chapters - 2|": null,
+  "Shingeki No Kyojin - S04P03 - The Final Chapters - 1|": null,
+  "|1987": null,
+  "Predator|": {
+    "poster": "https://image.tmdb.org/t/p/w342/empQGO0pCVTndCpihyVpNfaLebl.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/gaKFXcB5J1gz0QqYj8bWIfrPc04.jpg",
+    "overview": "Jugé trop faible et indigne par son père, chef de la tribu des Yautja, Dek est sur le point de se faire exécuter par son frère Kwei. Mais au dernier moment, celui-ci préfère se sacrifier pour favoriser sa fuite. Décidé à prouver son courage, le jeune paria se rend sur la planète Genna pour y capturer le Kalisk, un monstre réputé invincible. Confronté à une nature hostile et imprévisible, le guerrier inexpérimenté doit sa survie à Thia, une androïde privée de la partie inférieure de son corps depuis son affrontement avec le Kalisk. Avec l'aide de celle-ci, Dek amorce sa traque de la terrible créature, convoitée par des scientifiques pour ses formidables dons de régénération.",
+    "tmdb_title": "Predator: Badlands"
+  },
+  "The Terminator|1984": {
+    "poster": "https://image.tmdb.org/t/p/w342/oShNrYScpLBi4pyOjytPy9BerRr.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/ffdqHMWkh1h9MABwIfbfRJhgFW6.jpg",
+    "overview": "À Los Angeles en 1984, un Terminator, cyborg surgi du futur, a pour mission d'exécuter Sarah Connor, une jeune femme dont l'enfant à naître doit sauver l'humanité. Kyle Reese, un résistant humain, débarque lui aussi pour combattre le robot, et aider la jeune femme…",
+    "tmdb_title": "Terminator"
+  },
+  "To Catch A Thief|1955": {
+    "poster": "https://image.tmdb.org/t/p/w342/fRZbxkD8H793ArKlr2jdj8xc1RY.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/jGyDvz8WjVZzHX573WDs8BTIUU9.jpg",
+    "overview": "Au cours de l'été 1954 sur la côte d’Azur, les vols de bijoux se succèdent dans les palaces et les belles villas. Ils portent tous la même signature, celle de Georges Robert surnommé « Le Chat », un gentleman cambrioleur en retraite sur les bords de la Méditerranée, près de Cannes. La milliardaire Mme Jessie Stevens, venue en Europe avec l'espoir d'y trouver un mari convenable à sa fille Frances, est en bonne place sur la liste des principales victimes. H. H. Hughson, l'agent d'assurance de la Lloyds of London veut utiliser un voleur pour attraper un autre voleur.  En Anglais, le personnage joué par Cary Grant est John Robie, alias « John Robie the Cat ». En Français, il a été traduit par Georges Robert.",
+    "tmdb_title": "La Main au collet"
+  },
+  "Rear Window|1954": {
+    "poster": "https://image.tmdb.org/t/p/w342/xiPX9jCpPXQIqIrbbuHfsL4qt9c.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/zZvtZZXRnZ4Tdcs0QEWaZZcIWy8.jpg",
+    "overview": "À cause d'une jambe cassée, le reporter-photographe L. B. Jefferies est contraint de rester chez lui dans un fauteuil roulant. Homme d'action et amateur d'aventures, il s'aperçoit qu'il peut tirer parti de son immobilité forcée en étudiant le comportement des habitants de l'immeuble qu'il occupe dans Greenwich Village. Et ses observations l'amènent à la conviction que Lars Thorwald, son voisin d'en face, a assassiné sa femme. Sa fiancée, Lisa Fremont, ne le prend tout d'abord pas au sérieux, ironisant sur l'excitation que lui procure sa surveillance, mais finit par se prendre au jeu.",
+    "tmdb_title": "Fenêtre sur cour"
+  }
 }

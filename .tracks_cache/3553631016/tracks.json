@@ -1,0 +1,19 @@
+{
+  "audio_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "English",
+      "codec": "aac",
+      "channels": 6
+    }
+  ],
+  "subtitle_tracks": [
+    {
+      "index": 1000,
+      "language": "fr",
+      "label": "Français (externe)",
+      "url": "/track/subs/3553631016/1000"
+    }
+  ]
+}

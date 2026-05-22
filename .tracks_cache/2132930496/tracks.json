@@ -1,0 +1,12 @@
+{
+  "audio_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "Surround 5.1",
+      "codec": "eac3",
+      "channels": 6
+    }
+  ],
+  "subtitle_tracks": []
+}

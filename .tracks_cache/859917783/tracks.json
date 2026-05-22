@@ -1,0 +1,193 @@
+{
+  "audio_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "English FLAC 1.0",
+      "codec": "flac",
+      "channels": 1
+    },
+    {
+      "index": 1,
+      "language": "eng",
+      "label": "Commentary by author John Farwell",
+      "codec": "aac",
+      "channels": 2
+    },
+    {
+      "index": 2,
+      "language": "fre",
+      "label": "French AAC 1.0",
+      "codec": "aac",
+      "channels": 1
+    },
+    {
+      "index": 3,
+      "language": "ger",
+      "label": "German AAC 1.0",
+      "codec": "aac",
+      "channels": 1
+    },
+    {
+      "index": 4,
+      "language": "ita",
+      "label": "Italian AAC 1.0",
+      "codec": "aac",
+      "channels": 1
+    },
+    {
+      "index": 5,
+      "language": "jpn",
+      "label": "Japanese AAC 1.0",
+      "codec": "aac",
+      "channels": 1
+    },
+    {
+      "index": 6,
+      "language": "spa",
+      "label": "Spanish AAC 1.0",
+      "codec": "aac",
+      "channels": 1
+    }
+  ],
+  "subtitle_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "English SRT",
+      "url": "/track/subs/859917783/0"
+    },
+    {
+      "index": 1,
+      "language": "eng",
+      "label": "English SRT-SDH",
+      "url": "/track/subs/859917783/1"
+    },
+    {
+      "index": 3,
+      "language": "eng",
+      "label": "English Commentary",
+      "url": "/track/subs/859917783/3"
+    },
+    {
+      "index": 6,
+      "language": "dan",
+      "label": "Danish",
+      "url": "/track/subs/859917783/6"
+    },
+    {
+      "index": 7,
+      "language": "dut",
+      "label": "Dutch",
+      "url": "/track/subs/859917783/7"
+    },
+    {
+      "index": 8,
+      "language": "fin",
+      "label": "Finnish",
+      "url": "/track/subs/859917783/8"
+    },
+    {
+      "index": 9,
+      "language": "fre",
+      "label": "French",
+      "url": "/track/subs/859917783/9"
+    },
+    {
+      "index": 10,
+      "language": "fre",
+      "label": "French Forced",
+      "url": "/track/subs/859917783/10"
+    },
+    {
+      "index": 11,
+      "language": "fre",
+      "label": "French Commentary",
+      "url": "/track/subs/859917783/11"
+    },
+    {
+      "index": 12,
+      "language": "ger",
+      "label": "German",
+      "url": "/track/subs/859917783/12"
+    },
+    {
+      "index": 13,
+      "language": "ger",
+      "label": "German Forced",
+      "url": "/track/subs/859917783/13"
+    },
+    {
+      "index": 14,
+      "language": "ger",
+      "label": "German Commentary",
+      "url": "/track/subs/859917783/14"
+    },
+    {
+      "index": 15,
+      "language": "ice",
+      "label": "Icelandic",
+      "url": "/track/subs/859917783/15"
+    },
+    {
+      "index": 16,
+      "language": "ita",
+      "label": "Italian",
+      "url": "/track/subs/859917783/16"
+    },
+    {
+      "index": 17,
+      "language": "ita",
+      "label": "Italian Forced",
+      "url": "/track/subs/859917783/17"
+    },
+    {
+      "index": 18,
+      "language": "ita",
+      "label": "Italian Commentary",
+      "url": "/track/subs/859917783/18"
+    },
+    {
+      "index": 23,
+      "language": "nor",
+      "label": "Norwegian",
+      "url": "/track/subs/859917783/23"
+    },
+    {
+      "index": 24,
+      "language": "spa",
+      "label": "Spanish",
+      "url": "/track/subs/859917783/24"
+    },
+    {
+      "index": 25,
+      "language": "spa",
+      "label": "Spanish Forced",
+      "url": "/track/subs/859917783/25"
+    },
+    {
+      "index": 26,
+      "language": "spa",
+      "label": "Spanish Commentary",
+      "url": "/track/subs/859917783/26"
+    },
+    {
+      "index": 27,
+      "language": "por",
+      "label": "Portuguese",
+      "url": "/track/subs/859917783/27"
+    },
+    {
+      "index": 28,
+      "language": "swe",
+      "label": "Swedish",
+      "url": "/track/subs/859917783/28"
+    },
+    {
+      "index": 29,
+      "language": "eng",
+      "label": "Turkish",
+      "url": "/track/subs/859917783/29"
+    }
+  ]
+}

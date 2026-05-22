@@ -1,0 +1,19 @@
+{
+  "audio_tracks": [
+    {
+      "index": 0,
+      "language": "chi",
+      "label": "Surround",
+      "codec": "aac",
+      "channels": 6
+    }
+  ],
+  "subtitle_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "English",
+      "url": "/track/subs/2239812292/0"
+    }
+  ]
+}
