@@ -674,17 +674,30 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
         )
 
         print(f"🔧 Remux piste audio {audio_idx} ({track_codec or '?'}) : {movie['filename']}")
+        log_path = out_path.parent / f"audio_{audio_idx}.log"
         cmd = [
-            "ffmpeg", "-y", "-i", str(filepath),
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(filepath),
             "-map", "0:v:0", "-c:v", "copy",
             "-map", f"0:a:{audio_idx}", *a_args,
+            "-sn", "-dn",
             "-movflags", "+faststart",
+            "-f", "mp4",
             str(tmp_path)
         ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            log_fh = open(log_path, "wb")
+        except Exception:
+            log_fh = subprocess.DEVNULL
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_fh)
 
         def _watch():
             proc.wait()
+            if hasattr(log_fh, "close"):
+                try:
+                    log_fh.close()
+                except Exception:
+                    pass
             with _audio_remux_lock:
                 if tmp_path.exists() and tmp_path.stat().st_size > 0 and proc.returncode == 0:
                     try:
@@ -700,7 +713,15 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
                     except Exception:
                         pass
                 _audio_remux_state[key] = {"status": "error", "progress": 0.0}
-                print(f"   ⚠ Échec remux piste audio {audio_idx} (code {proc.returncode})")
+                err_excerpt = ""
+                try:
+                    if log_path.exists():
+                        err_excerpt = log_path.read_text(errors="replace").strip().splitlines()[-5:]
+                        err_excerpt = "\n      " + "\n      ".join(err_excerpt) if err_excerpt else ""
+                except Exception:
+                    pass
+                print(f"   ⚠ Échec remux piste audio {audio_idx} (code {proc.returncode}){err_excerpt}")
+                print(f"      Log complet : {log_path}")
 
         threading.Thread(target=_watch, daemon=True).start()
         _audio_remux_state[key] = {"status": "preparing", "progress": 0.0, "process": proc}
