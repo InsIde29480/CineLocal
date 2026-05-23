@@ -668,17 +668,33 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
         except Exception:
             track_codec = ""
 
-        a_args = (
-            ["-c:a", "copy"] if track_codec in AUDIO_OK
-            else ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-        )
+        try:
+            vresult = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-select_streams", "v:0",
+                "-show_streams", str(filepath)
+            ], capture_output=True, text=True, timeout=10)
+            vcodec = json.loads(vresult.stdout).get("streams", [{}])[0].get("codec_name", "")
+        except Exception:
+            vcodec = ""
 
-        print(f"🔧 Remux piste audio {audio_idx} ({track_codec or '?'}) : {movie['filename']}")
+        if track_codec in AUDIO_OK:
+            a_args = ["-c:a", "copy"]
+            if track_codec == "aac":
+                a_args += ["-bsf:a", "aac_adtstoasc"]
+        else:
+            a_args = ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
+
+        v_args = ["-c:v", "copy"]
+        if vcodec in {"hevc", "h265"}:
+            v_args += ["-tag:v", "hvc1"]
+
+        print(f"🔧 Remux piste audio {audio_idx} (vidéo={vcodec or '?'}, audio={track_codec or '?'}) : {movie['filename']}")
         log_path = out_path.parent / f"audio_{audio_idx}.log"
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(filepath),
-            "-map", "0:v:0", "-c:v", "copy",
+            "-map", "0:v:0", *v_args,
             "-map", f"0:a:{audio_idx}", *a_args,
             "-sn", "-dn",
             "-movflags", "+faststart",
