@@ -957,34 +957,68 @@
         btn.classList.toggle('active', i === trackIndex);
       });
 
+      video.pause();
       loading.classList.remove('hidden');
-      setLoadingState('Changement de piste audio…', 'Préparation du flux', false, true);
 
-      var url = (trackIndex === 0)
-        ? ('/stream/' + currentMovie.id)
-        : ('/stream/' + currentMovie.id + '?audio=' + trackIndex);
+      function applySource() {
+        var url = (trackIndex === 0)
+          ? ('/stream/' + currentMovie.id)
+          : ('/stream/' + currentMovie.id + '?audio=' + trackIndex);
+        video.src = url;
+        video.load();
 
-      video.src = url;
-      video.load();
+        video.addEventListener('loadedmetadata', function() {
+          video.currentTime = currentTime;
+          if (!wasPaused) {
+            video.addEventListener('playing', function onPlaying() {
+              setLoadingState('Prêt !', 'Lecture en cours', true, true);
+              setTimeout(function() { loading.classList.add('hidden'); }, 200);
+              video.removeEventListener('playing', onPlaying);
+            });
+            video.play().catch(function() { loading.classList.add('hidden'); });
+          } else {
+            loading.classList.add('hidden');
+          }
+        }, { once: true });
 
-      video.addEventListener('loadedmetadata', function() {
-        video.currentTime = currentTime;
-        if (!wasPaused) {
-          video.addEventListener('playing', function onPlaying() {
-            setLoadingState('Prêt !', 'Lecture en cours', true, true);
-            setTimeout(function() { loading.classList.add('hidden'); }, 200);
-            video.removeEventListener('playing', onPlaying);
+        video.addEventListener('error', function() {
+          setLoadingState('Erreur', 'Impossible de charger cette piste', true, true);
+          setTimeout(function() { loading.classList.add('hidden'); }, 2000);
+        }, { once: true });
+      }
+
+      if (trackIndex === 0) {
+        setLoadingState('Changement de piste audio…', 'Préparation du flux', false, true);
+        applySource();
+        return;
+      }
+
+      var movieId = currentMovie.id;
+      function pollStatus() {
+        if (!currentMovie || currentMovie.id !== movieId) return;
+        fetch('/api/audio_status/' + movieId + '/' + trackIndex)
+          .then(function(r) { return r.json(); })
+          .then(function(state) {
+            if (state.status === 'ready') {
+              setLoadingState('Changement de piste audio…', 'Démarrage…', false, true);
+              applySource();
+            } else if (state.status === 'preparing') {
+              var pct = Math.round((state.progress || 0) * 100);
+              setLoadingState('Préparation de la piste audio…', 'Remuxage ' + pct + '%', false, true);
+              setTimeout(pollStatus, 600);
+            } else {
+              setLoadingState('Erreur', state.message || 'Échec de la préparation', true, true);
+              setTimeout(function() { loading.classList.add('hidden'); }, 2000);
+            }
+          })
+          .catch(function() {
+            setLoadingState('Erreur', 'Connexion impossible', true, true);
+            setTimeout(function() { loading.classList.add('hidden'); }, 2000);
           });
-          video.play().catch(function() { loading.classList.add('hidden'); });
-        } else {
-          loading.classList.add('hidden');
-        }
-      }, { once: true });
+      }
 
-      video.addEventListener('error', function() {
-        setLoadingState('Erreur', 'Impossible de charger cette piste', true, true);
-        setTimeout(function() { loading.classList.add('hidden'); }, 2000);
-      }, { once: true });
+      setLoadingState('Préparation de la piste audio…', 'Démarrage…', false, true);
+      pollStatus();
     }
 
     function attachSubtitleTracks(video, subtitleTracks) {
