@@ -1,0 +1,12 @@
+{
+  "audio_tracks": [
+    {
+      "index": 0,
+      "language": "eng",
+      "label": "English",
+      "codec": "aac",
+      "channels": 6
+    }
+  ],
+  "subtitle_tracks": []
+}

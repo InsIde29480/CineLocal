@@ -149,7 +149,6 @@ def probe_codecs(filepath: str) -> dict:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EXTRACTION DES SOUS-TITRES
-# (les pistes audio sont gérées nativement par Chrome via video.audioTracks)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _lang_label(code: str) -> str:
@@ -169,8 +168,8 @@ _extraction_locks = {}
 
 def extract_tracks(movie: dict) -> dict:
     """
-    Analyse un film et extrait ses sous-titres en VTT sur disque.
-    Cache le résultat dans .tracks_cache/<movie_id>/tracks.json
+    Extrait les sous-titres en VTT + liste les pistes audio (métadonnées).
+    Cache dans .tracks_cache/<movie_id>/tracks.json
     """
     movie_id = movie["id"]
     filepath = movie["path"]
@@ -181,7 +180,7 @@ def extract_tracks(movie: dict) -> dict:
         _extraction_locks[movie_id] = threading.Lock()
 
     with _extraction_locks[movie_id]:
-        # ─── Cache : vérifie si SRT externes modifiés depuis ────────────────
+        # Vérifie les SRT externes modifiés
         if metadata_file.exists():
             cache_mtime = metadata_file.stat().st_mtime
             movie_dir = Path(filepath).parent
@@ -206,7 +205,6 @@ def extract_tracks(movie: dict) -> dict:
         cache_dir.mkdir(parents=True, exist_ok=True)
         print(f"🔍 Extraction des pistes : {movie['filename']}")
 
-        # ─── ffprobe ────────────────────────────────────────────────────────
         try:
             result = subprocess.run([
                 "ffprobe", "-v", "quiet", "-print_format", "json",
@@ -223,7 +221,6 @@ def extract_tracks(movie: dict) -> dict:
         audio_idx = 0
         subs_idx = 0
 
-        # ─── Pistes internes ────────────────────────────────────────────────
         for stream in streams:
             codec_type = stream.get("codec_type")
             tags = stream.get("tags", {})
@@ -231,7 +228,6 @@ def extract_tracks(movie: dict) -> dict:
             title = tags.get("title", "")
 
             if codec_type == "audio":
-                # On garde les métadonnées audio pour info (utile en fallback)
                 audio_tracks.append({
                     "index":    audio_idx,
                     "language": lang,
@@ -259,14 +255,14 @@ def extract_tracks(movie: dict) -> dict:
                                 "label":    title or _lang_label(lang),
                                 "url":      f"/track/subs/{movie_id}/{subs_idx}",
                             })
-                            print(f"   ✓ Sous-titres {lang} extraits")
+                            print(f"   ✓ Sous-titres {lang} : {title or codec}")
                     except Exception as e:
                         print(f"   ⚠ Échec sous-titres {subs_idx} : {e}")
                 else:
                     print(f"   ⏭  Sous-titres image ({codec}) ignorés")
                 subs_idx += 1
 
-        # ─── Sous-titres externes (.srt / .vtt à côté du film) ──────────────
+        # Sous-titres externes
         movie_dir = Path(filepath).parent
         movie_stem = Path(filepath).stem
 
@@ -276,10 +272,8 @@ def extract_tracks(movie: dict) -> dict:
                 lang = parts[-1].lower() if len(parts) > 1 else "und"
                 if len(lang) > 3 or not lang.isalpha():
                     lang = "und"
-
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
-
                 try:
                     if ext == '.vtt':
                         import shutil
@@ -287,10 +281,8 @@ def extract_tracks(movie: dict) -> dict:
                     else:
                         subprocess.run([
                             "ffmpeg", "-y", "-i", str(sub_file),
-                            "-c:s", "webvtt",
-                            str(vtt_path)
+                            "-c:s", "webvtt", str(vtt_path)
                         ], capture_output=True, timeout=30)
-
                     if vtt_path.exists() and vtt_path.stat().st_size > 0:
                         subtitle_tracks.append({
                             "index":    external_idx,
@@ -314,10 +306,8 @@ def extract_tracks(movie: dict) -> dict:
                     else:
                         subprocess.run([
                             "ffmpeg", "-y", "-i", str(simple_sub),
-                            "-c:s", "webvtt",
-                            str(vtt_path)
+                            "-c:s", "webvtt", str(vtt_path)
                         ], capture_output=True, timeout=30)
-
                     if vtt_path.exists() and vtt_path.stat().st_size > 0:
                         subtitle_tracks.append({
                             "index":    external_idx,
@@ -330,7 +320,6 @@ def extract_tracks(movie: dict) -> dict:
                 except Exception as e:
                     print(f"   ⚠ Échec sous-titres externes {simple_sub.name} : {e}")
 
-        # ─── Sauvegarde du cache ────────────────────────────────────────────
         metadata = {
             "audio_tracks":    audio_tracks,
             "subtitle_tracks": subtitle_tracks,
@@ -339,7 +328,7 @@ def extract_tracks(movie: dict) -> dict:
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-        print(f"   ✅ {len(audio_tracks)} audio, {len(subtitle_tracks)} sous-titres")
+        print(f"   ✅ {len(audio_tracks)} piste(s) audio, {len(subtitle_tracks)} sous-titre(s)")
         return metadata
 
 
@@ -437,14 +426,6 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
     except Exception as e:
         print(f"⚠  TMDB échec pour '{query}' : {e}")
         return None
-
-
-def fetch_tmdb(title: str, year: str | None) -> dict | None:
-    if not TMDB_API_KEY:
-        return None
-    if re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', title):
-        return _fetch_tmdb_tv(title)
-    return _fetch_tmdb_movie(title, year)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -678,8 +659,7 @@ def api_tracks(movie_id):
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"error": "Film introuvable"}), 404
-    tracks = extract_tracks(movie)
-    return jsonify(tracks)
+    return jsonify(extract_tracks(movie))
 
 
 @app.route("/api/tracks/<movie_id>/refresh")
@@ -688,8 +668,7 @@ def api_tracks_refresh(movie_id):
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"error": "Film introuvable"}), 404
-    tracks = extract_tracks(movie)
-    return jsonify(tracks)
+    return jsonify(extract_tracks(movie))
 
 
 @app.route("/track/subs/<movie_id>/<int:idx>")
@@ -700,48 +679,92 @@ def serve_subs(movie_id, idx):
     return Response("Sous-titres introuvables", status=404)
 
 
-# ─── STREAM PC ────────────────────────────────────────────────────────────────
+# ─── STREAM PC (fichier brut + piste audio optionnelle) ───────────────────────
 
 @app.route("/stream/<movie_id>")
 def stream_video(movie_id):
-    """Stream pour lecture navigateur — sert toujours le fichier brut."""
+    """
+    Stream pour lecture navigateur.
+    ?audio=N : sélectionne une piste audio spécifique (transcodage).
+    Sans paramètre : fichier brut (chargement instantané).
+    """
     movie = get_movie_by_id(movie_id)
     if not movie:
         return Response("Film introuvable", status=404)
 
     filepath = movie["path"]
+    audio_idx = request.args.get("audio", default=None, type=int)
+
+    if audio_idx is not None:
+        # Probe le codec de la piste demandée
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-select_streams", f"a:{audio_idx}",
+                "-show_streams", str(filepath)
+            ], capture_output=True, text=True, timeout=10)
+            track_codec = json.loads(result.stdout).get("streams", [{}])[0].get("codec_name", "")
+        except Exception:
+            track_codec = ""
+
+        if track_codec in BROWSER_AUDIO_OK:
+            # Déjà compatible → remux (rapide)
+            print(f"🖥️  PC piste {audio_idx} ({track_codec}, remux) : {movie['filename']}")
+            a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "copy"]
+        else:
+            # Incompatible → ré-encodage AAC
+            print(f"🖥️  PC piste {audio_idx} ({track_codec} → AAC) : {movie['filename']}")
+            a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
+
+        return _transcode_stream(
+            filepath,
+            v_arg=["-map", "0:v:0", "-c:v", "copy"],
+            a_arg=a_arg
+        )
+
     mimetype = MIME_MAP.get(movie["ext"], "video/mp4")
     return _stream_file_ranged(filepath, mimetype)
 
 
-# ─── STREAM CHROMECAST ────────────────────────────────────────────────────────
+# ─── STREAM CHROMECAST (avec piste audio optionnelle) ────────────────────────
 
 @app.route("/cast/<movie_id>")
 def cast_video(movie_id):
+    """
+    Stream pour Chromecast.
+    ?audio=N : sélectionne une piste audio spécifique.
+    Transcode vidéo et/ou audio si nécessaire pour la compatibilité Chromecast.
+    """
     movie = get_movie_by_id(movie_id)
     if not movie:
         return Response("Film introuvable", status=404)
 
     filepath = movie["path"]
     codecs = probe_codecs(filepath)
+    audio_idx = request.args.get("audio", default=None, type=int)
 
     video_ok = codecs["video"] in VIDEO_OK
-    audio_ok = codecs["audio"] in AUDIO_OK
 
-    if video_ok and audio_ok:
-        print(f"📺 Cast direct : {movie['filename']}")
-        return redirect(f"/stream/{movie_id}", code=302)
-
-    v_arg = ["-c:v", "copy"] if video_ok else [
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
-    ]
-    a_arg = ["-c:a", "copy"] if audio_ok else [
-        "-c:a", "aac", "-b:a", "192k", "-ac", "2"
+    # Argument vidéo
+    v_arg = ["-map", "0:v:0", "-c:v", "copy"] if video_ok else [
+        "-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
     ]
 
-    print(f"📺 Cast transcodage : {movie['filename']}")
-    print(f"   Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
-    print(f"   Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
+    # Argument audio : piste spécifique ou piste par défaut
+    if audio_idx is not None:
+        a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
+        print(f"📺 Cast piste audio {audio_idx} : {movie['filename']}")
+    else:
+        audio_ok = codecs["audio"] in AUDIO_OK
+        if video_ok and audio_ok:
+            print(f"📺 Cast direct : {movie['filename']}")
+            return redirect(f"/stream/{movie_id}", code=302)
+        a_arg = ["-map", "0:a:0", "-c:a", "copy"] if audio_ok else [
+            "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"
+        ]
+        print(f"📺 Cast transcodage : {movie['filename']}")
+        print(f"   Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
+        print(f"   Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
 
     return _transcode_stream(filepath, v_arg, a_arg)
 
