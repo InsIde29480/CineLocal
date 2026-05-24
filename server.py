@@ -443,18 +443,18 @@ def scan_movies() -> list:
     for filepath in sorted(MOVIES_DIR.rglob("*")):
         if filepath.suffix.lower() not in SUPPORTED_EXTS:
             continue
-        if filepath.name.startswith("."):
+        try:
+            rel = filepath.relative_to(MOVIES_DIR)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
             continue
 
         movie_id = str(hash(str(filepath)) & 0xFFFFFFFF)
         tags = extract_tags(filepath.name)
         ep = parse_episode(filepath.name)
 
-        try:
-            rel = filepath.relative_to(MOVIES_DIR)
-            category = rel.parts[0] if len(rel.parts) > 1 else "Films"
-        except ValueError:
-            category = "Films"
+        category = rel.parts[0] if len(rel.parts) > 1 else "Films"
 
         common = {
             "id":         movie_id,
