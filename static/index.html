@@ -233,6 +233,25 @@
     .icon-btn:hover { background: rgba(255,255,255,0.25); }
     #player-video { width: 100%; display: block; aspect-ratio: 16/9; background: #000; }
 
+    /* Sous-titres : force un positionnement explicite pour éviter que le
+       conteneur natif WebKit ne se cache quand les contrôles auto-masquent */
+    #player-video::cue {
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      font-family: 'DM Mono', monospace;
+      font-size: 1.05em;
+      line-height: 1.35;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.85);
+    }
+    #player-video::-webkit-media-text-track-container {
+      overflow: visible !important;
+      pointer-events: none;
+    }
+    #player-video::-webkit-media-text-track-display {
+      bottom: 10% !important;
+      text-align: center;
+    }
+
     /* Overlay chargement */
     .player-loading {
       position: absolute; inset: 0; background: rgba(0,0,0,0.92);
