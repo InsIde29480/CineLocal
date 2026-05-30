@@ -9,6 +9,8 @@ import re
 import json
 import subprocess
 import threading
+import shutil
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -143,7 +145,7 @@ def probe_codecs(filepath: str) -> dict:
                        if s.get("codec_type") == "audio"), None)
         return {"video": vcodec, "audio": acodec}
     except Exception as e:
-        print(f"⚠  ffprobe échec : {e}")
+        print(f"ffprobe échec : {e}")
         return {"video": None, "audio": None}
 
 
@@ -191,7 +193,7 @@ def extract_tracks(movie: dict) -> dict:
                 for sub_file in movie_dir.glob(f"{movie_stem}*{ext}"):
                     if sub_file.stat().st_mtime > cache_mtime:
                         srt_changed = True
-                        print(f"📝 Nouveau sous-titre détecté : {sub_file.name}")
+                        print(f"Nouveau sous-titre détecté : {sub_file.name}")
                         break
                 if srt_changed:
                     break
@@ -203,7 +205,7 @@ def extract_tracks(movie: dict) -> dict:
                     pass
 
         cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"🔍 Extraction des pistes : {movie['filename']}")
+        print(f"Extraction des pistes : {movie['filename']}")
 
         try:
             result = subprocess.run([
@@ -212,7 +214,7 @@ def extract_tracks(movie: dict) -> dict:
             ], capture_output=True, text=True, timeout=30)
             data = json.loads(result.stdout)
         except Exception as e:
-            print(f"⚠  ffprobe échec : {e}")
+            print(f"ffprobe échec : {e}")
             return {"audio_tracks": [], "subtitle_tracks": []}
 
         streams = data.get("streams", [])
@@ -255,11 +257,11 @@ def extract_tracks(movie: dict) -> dict:
                                 "label":    title or _lang_label(lang),
                                 "url":      f"/track/subs/{movie_id}/{subs_idx}",
                             })
-                            print(f"   ✓ Sous-titres {lang} : {title or codec}")
+                            print(f"Sous-titres {lang} : {title or codec}")
                     except Exception as e:
-                        print(f"   ⚠ Échec sous-titres {subs_idx} : {e}")
+                        print(f"Échec sous-titres {subs_idx} : {e}")
                 else:
-                    print(f"   ⏭  Sous-titres image ({codec}) ignorés")
+                    print(f"Sous-titres image ({codec}) ignorés")
                 subs_idx += 1
 
         # Sous-titres externes
@@ -276,7 +278,6 @@ def extract_tracks(movie: dict) -> dict:
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 try:
                     if ext == '.vtt':
-                        import shutil
                         shutil.copy(sub_file, vtt_path)
                     else:
                         subprocess.run([
@@ -290,10 +291,10 @@ def extract_tracks(movie: dict) -> dict:
                             "label":    f"{_lang_label(lang)} (externe)",
                             "url":      f"/track/subs/{movie_id}/{external_idx}",
                         })
-                        print(f"   ✓ Sous-titres externes : {sub_file.name} ({lang})")
+                        print(f"Sous-titres externes : {sub_file.name} ({lang})")
                         subs_idx += 1
                 except Exception as e:
-                    print(f"   ⚠ Échec sous-titres externes {sub_file.name} : {e}")
+                    print(f"Échec sous-titres externes {sub_file.name} : {e}")
 
             simple_sub = movie_dir / f"{movie_stem}{ext}"
             if simple_sub.exists():
@@ -301,7 +302,6 @@ def extract_tracks(movie: dict) -> dict:
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 try:
                     if ext == '.vtt':
-                        import shutil
                         shutil.copy(simple_sub, vtt_path)
                     else:
                         subprocess.run([
@@ -315,10 +315,10 @@ def extract_tracks(movie: dict) -> dict:
                             "label":    "Sous-titres (externe)",
                             "url":      f"/track/subs/{movie_id}/{external_idx}",
                         })
-                        print(f"   ✓ Sous-titres externes : {simple_sub.name}")
+                        print(f"Sous-titres externes : {simple_sub.name}")
                         subs_idx += 1
                 except Exception as e:
-                    print(f"   ⚠ Échec sous-titres externes {simple_sub.name} : {e}")
+                    print(f"Échec sous-titres externes {simple_sub.name} : {e}")
 
         metadata = {
             "audio_tracks":    audio_tracks,
@@ -328,14 +328,13 @@ def extract_tracks(movie: dict) -> dict:
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-        print(f"   ✅ {len(audio_tracks)} piste(s) audio, {len(subtitle_tracks)} sous-titre(s)")
+        print(f"    {len(audio_tracks)} piste(s) audio, {len(subtitle_tracks)} sous-titre(s)")
         return metadata
 
 
 def clear_tracks_cache(movie_id: str):
     cache_dir = TRACKS_CACHE_DIR / movie_id
     if cache_dir.exists():
-        import shutil
         shutil.rmtree(cache_dir)
 
 
@@ -389,14 +388,14 @@ def _fetch_tmdb_tv(title: str) -> dict | None:
         results = r.json().get("results", [])
         if results:
             result = _tmdb_format(results[0], title_key="name")
-            print(f"📺 TMDB (série) : '{clean}' → '{results[0].get('name')}'")
+            print(f"TMDB (série) : '{clean}' → '{results[0].get('name')}'")
         else:
             result = None
-            print(f"❌ TMDB (série) : '{clean}' → aucun résultat")
+            print(f"TMDB (série) : '{clean}' → aucun résultat")
         _tmdb_cache[key] = result
         return result
     except Exception as e:
-        print(f"⚠  TMDB série échec : {e}")
+        print(f"TMDB série échec : {e}")
         return None
 
 
@@ -417,14 +416,14 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
             results = r.json().get("results", [])
         if results:
             result = _tmdb_format(results[0], title_key="title")
-            print(f"✅ TMDB : '{query}' → '{results[0].get('title')}'")
+            print(f"TMDB : '{query}' → '{results[0].get('title')}'")
         else:
             result = None
-            print(f"❌ TMDB : '{query}' ({year}) → aucun résultat")
+            print(f"TMDB : '{query}' ({year}) → aucun résultat")
         _tmdb_cache[key] = result
         return result
     except Exception as e:
-        print(f"⚠  TMDB échec pour '{query}' : {e}")
+        print(f"TMDB échec pour '{query}' : {e}")
         return None
 
 
@@ -437,7 +436,7 @@ def scan_movies() -> list:
     series_groups = {}
 
     if not MOVIES_DIR.exists():
-        print(f"⚠  Dossier introuvable : {MOVIES_DIR}")
+        print(f"Dossier introuvable : {MOVIES_DIR}")
         return items
 
     for filepath in sorted(MOVIES_DIR.rglob("*")):
@@ -521,7 +520,7 @@ def scan_movies() -> list:
                          if (it["kind"] == "series" and f"TV|{it['title']}" not in _tmdb_cache)
                          or (it["kind"] == "movie" and f"{re.sub(_YEAR_PATTERN, '', it['title']).strip()}|{it.get('year') or ''}" not in _tmdb_cache))
     if to_fetch_count:
-        print(f"🎞  Recherche TMDB pour {to_fetch_count} entrée(s)...")
+        print(f"Recherche TMDB pour {to_fetch_count} entrée(s)...")
 
     with ThreadPoolExecutor(max_workers=10) as ex:
         results = list(ex.map(fetch_for_item, items))
@@ -544,9 +543,9 @@ def get_movies() -> list:
     global _movies_cache
     with _movies_lock:
         if _movies_cache is None:
-            print("🔍 Scan des films en cours...")
+            print("Scan des films en cours...")
             _movies_cache = scan_movies()
-            print(f"✅ {len(_movies_cache)} film(s) trouvé(s)")
+            print(f" {len(_movies_cache)} film(s) trouvé(s)")
         return _movies_cache
 
 
@@ -689,7 +688,7 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
         if vcodec in {"hevc", "h265"}:
             v_args += ["-tag:v", "hvc1"]
 
-        print(f"🔧 Remux piste audio {audio_idx} (vidéo={vcodec or '?'}, audio={track_codec or '?'}) : {movie['filename']}")
+        print(f"Remux piste audio {audio_idx} (vidéo={vcodec or '?'}, audio={track_codec or '?'}) : {movie['filename']}")
         log_path = out_path.parent / f"audio_{audio_idx}.log"
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -719,10 +718,10 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
                     try:
                         tmp_path.rename(out_path)
                         _audio_remux_state[key] = {"status": "ready", "progress": 1.0}
-                        print(f"   ✅ Remux prêt : audio_{audio_idx}.mp4")
+                        print(f"Remux prêt : audio_{audio_idx}.mp4")
                         return
                     except Exception as e:
-                        print(f"   ⚠ Renommage échoué : {e}")
+                        print(f"Renommage échoué : {e}")
                 if tmp_path.exists():
                     try:
                         tmp_path.unlink()
@@ -736,8 +735,8 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
                         err_excerpt = "\n      " + "\n      ".join(err_excerpt) if err_excerpt else ""
                 except Exception:
                     pass
-                print(f"   ⚠ Échec remux piste audio {audio_idx} (code {proc.returncode}){err_excerpt}")
-                print(f"      Log complet : {log_path}")
+                print(f"Échec remux piste audio {audio_idx} (code {proc.returncode}){err_excerpt}")
+                print(f"Log complet : {log_path}")
 
         threading.Thread(target=_watch, daemon=True).start()
         _audio_remux_state[key] = {"status": "preparing", "progress": 0.0, "process": proc}
@@ -746,7 +745,6 @@ def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
 
 def _ensure_audio_ready(movie: dict, audio_idx: int, timeout: float = 1800.0) -> Path | None:
     """Bloque jusqu'à ce que le MP4 remuxé soit prêt. Retourne le chemin ou None."""
-    import time
     deadline = time.time() + timeout
     state = _start_audio_remux(movie, audio_idx)
     while state["status"] == "preparing" and time.time() < deadline:
@@ -862,7 +860,7 @@ def stream_video(movie_id):
         out_path = _ensure_audio_ready(movie, audio_idx)
         if out_path is None:
             return Response("Échec préparation de la piste audio", status=500)
-        print(f"🖥️  PC piste {audio_idx} (remux cache) : {movie['filename']}")
+        print(f"PC piste {audio_idx} (remux cache) : {movie['filename']}")
         return _stream_file_ranged(str(out_path), "video/mp4")
 
     mimetype = MIME_MAP.get(movie["ext"], "video/mp4")
@@ -893,7 +891,7 @@ def cast_video(movie_id):
         out_path = _ensure_audio_ready(movie, audio_idx)
         if out_path is None:
             return Response("Échec préparation de la piste audio", status=500)
-        print(f"📺 Cast piste audio {audio_idx} (remux cache) : {movie['filename']}")
+        print(f"Cast piste audio {audio_idx} (remux cache) : {movie['filename']}")
         return _stream_file_ranged(str(out_path), "video/mp4")
 
     # Argument vidéo
@@ -904,18 +902,18 @@ def cast_video(movie_id):
     # Argument audio : piste spécifique ou piste par défaut
     if audio_idx is not None:
         a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-        print(f"📺 Cast piste audio {audio_idx} (transcodage vidéo) : {movie['filename']}")
+        print(f"Cast piste audio {audio_idx} (transcodage vidéo) : {movie['filename']}")
     else:
         audio_ok = codecs["audio"] in AUDIO_OK
         if video_ok and audio_ok:
-            print(f"📺 Cast direct : {movie['filename']}")
+            print(f"Cast direct : {movie['filename']}")
             return redirect(f"/stream/{movie_id}", code=302)
         a_arg = ["-map", "0:a:0", "-c:a", "copy"] if audio_ok else [
             "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"
         ]
-        print(f"📺 Cast transcodage : {movie['filename']}")
-        print(f"   Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
-        print(f"   Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
+        print(f"Cast transcodage : {movie['filename']}")
+        print(f"Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
+        print(f"Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
 
     return _transcode_stream(filepath, v_arg, a_arg)
 
@@ -941,7 +939,7 @@ def play_local(movie_id):
         movie["path"]
     ], env={**os.environ, "DISPLAY": ":0"})
 
-    print(f"🎬 Lecture locale : {movie['filename']}")
+    print(f"Lecture locale : {movie['filename']}")
     return jsonify({"status": "ok", "playing": movie["title"]})
 
 
@@ -961,10 +959,10 @@ def stop_local():
 
 if __name__ == "__main__":
     print("━" * 60)
-    print("🎬  CineLocal — Serveur de films local")
-    print(f"📁  Dossier films : {MOVIES_DIR}")
-    print(f"🌐  Interface     : http://localhost:{PORT}")
-    print(f"📺  Pour TV/Cast  : http://<ton-ip>:{PORT}")
+    print("CineLocal — Serveur de films local")
+    print(f"Dossier films : {MOVIES_DIR}")
+    print(f"Interface     : http://localhost:{PORT}")
+    print(f"Pour TV/Cast  : http://<ton-ip>:{PORT}")
     print("━" * 60)
 
     get_movies()
