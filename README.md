@@ -24,30 +24,20 @@ python server.py
 L'interface est dispo sur → **http://localhost:8765**
 ---
 
-## Structure attendue des films
-
-Le serveur scanne **~/nvme_data** récursivement.
-Les sous-dossiers deviennent des **catégories** dans l'interface :
-
-```
-~/nvme_data/
-├── Action/
-│   ├── Mad.Max.Fury.Road.2015.1080p.mkv
-│   └── John.Wick.2014.mkv
-├── Sci-Fi/
-│   └── Dune.2021.2160p.mkv
-└── Inception.2010.BluRay.mp4
-```
----
-
 ## Chromecast / Cast sur la TV
 
 ### Condition obligatoire
 **Utiliser Google Chrome** (le Cast SDK ne fonctionne que dans Chrome).
-**Formats supportés** : `.mp4` `.mkv`
-**Encodage vidéo** : `h.264`
-**Encodage audio** : `aac 2 canaux`
-**Encodage des sous-titres** : `fichier .str externe ou encodé directement`
+
+Deux configurations sont à réaliser sur chrome pour avoir accès au chromecast :
+**Experimental Web Platform features** : `ON`.
+**Insecure origin treated as secure** : `http://<server-ip>:<server-port>`.
+--
+
+**Formats supportés** : `.mp4` `.mkv`.
+**Encodage vidéo** : `h.264`.
+**Encodage audio** : `aac 2 canaux`.
+**Encodage des sous-titres** : `fichier .str externe ou encodé directement`.
 **Vérifiez bien la qualité maximale que votre chromecast peut supporter.**
 
 Le fichier de conversion (convert.ps1) est un fichier powershell permettant d'utiliser ffmpeg pour convertir les films et séries du dossier . dans le format chromecast officiel.
@@ -56,10 +46,24 @@ Commande pour autoriser l'execution de programme powershell dans une session :
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
+puis lancer le programme pour convertir :
+```powershell
+.\convert.ps1
+```
+**ATTENTION** : Le programme peut utiliser autant le `CPU` ou `NVIDIA` ou `AMD`, cette option est à configurer dans le programme en changant la variable `$Encoder` ligne 24.
 
+Le programme check_format.ps1 (windows powershell) ou check_format.sh (linux) permet de vérifier le bon format vidéo de chromecast.
+```powershell
+.\check_format.ps1
+```
+ou
+```bash
+chmod +X check_foramt.sh
+./check_format.sh
+```
 ---
 
-## 🔧 Configuration avancée
+## Configuration avancée
 
 Modifier les variables en tête de `server.py` :
 
@@ -71,7 +75,7 @@ Modifier les variables en tête de `server.py` :
 
 ---
 
-## 🚀 Lancement automatique au démarrage (Linux)
+## Lancement automatique au démarrage (Linux)
 
 ```bash
 # Créer un service systemd
