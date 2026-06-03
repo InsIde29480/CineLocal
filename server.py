@@ -13,9 +13,10 @@ import shutil
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from waitress import serve
 
 import requests
-from flask import Flask, jsonify, send_file, request, Response, send_from_directory, redirect
+from flask import Flask, jsonify, send_file, request, Response, send_from_directory
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -37,6 +38,7 @@ VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
 BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
+SUBS_LANG_OK     = {"fre", "fra", "fr", "francais", "français", "eng", "en", "english", "und", "vo"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -131,7 +133,13 @@ def series_title(filename: str) -> str:
 # ANALYSE FFPROBE
 # ══════════════════════════════════════════════════════════════════════════════
 
+_codec_cache = {}
+
+
 def probe_codecs(filepath: str) -> dict:
+    key = str(filepath)
+    if key in _codec_cache:
+        return _codec_cache[key]
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
@@ -143,10 +151,12 @@ def probe_codecs(filepath: str) -> dict:
                        if s.get("codec_type") == "video"), None)
         acodec = next((s["codec_name"] for s in data.get("streams", [])
                        if s.get("codec_type") == "audio"), None)
-        return {"video": vcodec, "audio": acodec}
+        codecs = {"video": vcodec, "audio": acodec}
     except Exception as e:
         print(f"ffprobe échec : {e}")
-        return {"video": None, "audio": None}
+        codecs = {"video": None, "audio": None}
+    _codec_cache[key] = codecs
+    return codecs
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -241,7 +251,9 @@ def extract_tracks(movie: dict) -> dict:
 
             elif codec_type == "subtitle":
                 codec = stream.get("codec_name", "")
-                if codec in SUBS_TEXT_CODECS:
+                if lang not in SUBS_LANG_OK:
+                    print(f"Sous-titres {lang} ignorés (langue non voulue)")
+                elif codec in SUBS_TEXT_CODECS:
                     vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
                     try:
                         subprocess.run([
@@ -572,34 +584,8 @@ MIME_MAP = {
 
 
 def _stream_file_ranged(filepath: str, mimetype: str):
-    file_size = os.path.getsize(filepath)
-    range_header = request.headers.get("Range")
-    if not range_header:
-        return send_file(filepath, mimetype=mimetype, conditional=True)
-
-    match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-    start = int(match.group(1))
-    end   = int(match.group(2)) if match.group(2) else file_size - 1
-    length = end - start + 1
-
-    def generate():
-        with open(filepath, "rb") as f:
-            f.seek(start)
-            remaining = length
-            while remaining:
-                chunk = f.read(min(67108864, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
-
-    headers = {
-        "Content-Range":  f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges":  "bytes",
-        "Content-Length": str(length),
-        "Content-Type":   mimetype,
-    }
-    return Response(generate(), status=206, headers=headers)
+    # Werkzeug gère les Range nativement + sendfile() noyau (zéro-copie)
+    return send_file(filepath, mimetype=mimetype, conditional=True)
 
 
 # ─── REMUX AUDIO À LA DEMANDE (cache disque, lecture instantanée + seek) ─────
@@ -846,7 +832,7 @@ def serve_subs(movie_id, idx):
 def stream_video(movie_id):
     """
     Stream pour lecture navigateur.
-    ?audio=N : sélectionne une piste audio spécifique (transcodage).
+    ?audio=N : sélectionne une piste audio spécifique (remux cache, seekable).
     Sans paramètre : fichier brut (chargement instantané).
     """
     movie = get_movie_by_id(movie_id)
@@ -907,7 +893,7 @@ def cast_video(movie_id):
         audio_ok = codecs["audio"] in AUDIO_OK
         if video_ok and audio_ok:
             print(f"Cast direct : {movie['filename']}")
-            return redirect(f"/stream/{movie_id}", code=302)
+            return _stream_file_ranged(filepath, MIME_MAP.get(movie["ext"], "video/mp4"))
         a_arg = ["-map", "0:a:0", "-c:a", "copy"] if audio_ok else [
             "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"
         ]
@@ -925,21 +911,50 @@ _current_player = None
 
 @app.route("/play/<movie_id>", methods=["POST"])
 def play_local(movie_id):
+    """
+    Lecture sur la sortie HDMI du Pi via MPV, en plein écran.
+    Paramètres optionnels (query string) :
+      ?audio=N  → index de la piste audio (0-based, tel que renvoyé par /api/tracks)
+      ?sub=M    → index du sous-titre (0-based interne, ou >=1000 pour un fichier externe)
+                  absent = aucun sous-titre
+    """
     global _current_player
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"status": "error", "message": "Film introuvable"}), 404
 
+    audio_idx = request.args.get("audio", default=None, type=int)
+    sub_idx   = request.args.get("sub",   default=None, type=int)
+
     if _current_player and _current_player.poll() is None:
         _current_player.terminate()
 
-    _current_player = subprocess.Popen([
+    mpv_cmd = [
         "mpv", "--fullscreen", "--hwdec=auto", "--no-osc",
         "--no-input-default-bindings",
-        movie["path"]
-    ], env={**os.environ, "DISPLAY": ":0"})
+    ]
 
-    print(f"Lecture locale : {movie['filename']}")
+    # Piste audio : MPV utilise un identifiant 1-based, notre index est 0-based
+    if audio_idx is not None:
+        mpv_cmd.append(f"--aid={audio_idx + 1}")
+
+    # Sous-titres
+    if sub_idx is None:
+        mpv_cmd.append("--sid=no")
+    elif sub_idx >= 1000:
+        # Sous-titre externe : on charge le VTT mis en cache
+        vtt_path = TRACKS_CACHE_DIR / movie_id / f"subs_{sub_idx}.vtt"
+        if vtt_path.exists():
+            mpv_cmd.append(f"--sub-file={vtt_path}")
+    else:
+        # Sous-titre interne : MPV 1-based
+        mpv_cmd.append(f"--sid={sub_idx + 1}")
+
+    mpv_cmd.append(movie["path"])
+
+    _current_player = subprocess.Popen(mpv_cmd, env={**os.environ, "DISPLAY": ":0"})
+
+    print(f"Lecture locale : {movie['filename']} (audio={audio_idx}, sub={sub_idx})")
     return jsonify({"status": "ok", "playing": movie["title"]})
 
 
@@ -966,4 +981,4 @@ if __name__ == "__main__":
     print("━" * 60)
 
     get_movies()
-    app.run(host=HOST, port=PORT, debug=False, threaded=True)
+    serve(app, host=HOST, port=PORT, threads=8)
