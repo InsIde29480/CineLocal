@@ -9,11 +9,14 @@ import re
 import json
 import subprocess
 import threading
+import shutil
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from waitress import serve
 
 import requests
-from flask import Flask, jsonify, send_file, request, Response, send_from_directory, redirect
+from flask import Flask, jsonify, send_file, request, Response, send_from_directory
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -35,6 +38,7 @@ VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
 BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
+SUBS_LANG_OK     = {"fre", "fra", "fr", "francais", "français", "eng", "en", "english", "und", "vo"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -129,7 +133,13 @@ def series_title(filename: str) -> str:
 # ANALYSE FFPROBE
 # ══════════════════════════════════════════════════════════════════════════════
 
+_codec_cache = {}
+
+
 def probe_codecs(filepath: str) -> dict:
+    key = str(filepath)
+    if key in _codec_cache:
+        return _codec_cache[key]
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
@@ -141,10 +151,12 @@ def probe_codecs(filepath: str) -> dict:
                        if s.get("codec_type") == "video"), None)
         acodec = next((s["codec_name"] for s in data.get("streams", [])
                        if s.get("codec_type") == "audio"), None)
-        return {"video": vcodec, "audio": acodec}
+        codecs = {"video": vcodec, "audio": acodec}
     except Exception as e:
-        print(f"⚠  ffprobe échec : {e}")
-        return {"video": None, "audio": None}
+        print(f"ffprobe échec : {e}")
+        codecs = {"video": None, "audio": None}
+    _codec_cache[key] = codecs
+    return codecs
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,7 +203,7 @@ def extract_tracks(movie: dict) -> dict:
                 for sub_file in movie_dir.glob(f"{movie_stem}*{ext}"):
                     if sub_file.stat().st_mtime > cache_mtime:
                         srt_changed = True
-                        print(f"📝 Nouveau sous-titre détecté : {sub_file.name}")
+                        print(f"Nouveau sous-titre détecté : {sub_file.name}")
                         break
                 if srt_changed:
                     break
@@ -203,7 +215,7 @@ def extract_tracks(movie: dict) -> dict:
                     pass
 
         cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"🔍 Extraction des pistes : {movie['filename']}")
+        print(f"Extraction des pistes : {movie['filename']}")
 
         try:
             result = subprocess.run([
@@ -212,7 +224,7 @@ def extract_tracks(movie: dict) -> dict:
             ], capture_output=True, text=True, timeout=30)
             data = json.loads(result.stdout)
         except Exception as e:
-            print(f"⚠  ffprobe échec : {e}")
+            print(f"ffprobe échec : {e}")
             return {"audio_tracks": [], "subtitle_tracks": []}
 
         streams = data.get("streams", [])
@@ -239,7 +251,9 @@ def extract_tracks(movie: dict) -> dict:
 
             elif codec_type == "subtitle":
                 codec = stream.get("codec_name", "")
-                if codec in SUBS_TEXT_CODECS:
+                if lang not in SUBS_LANG_OK:
+                    print(f"Sous-titres {lang} ignorés (langue non voulue)")
+                elif codec in SUBS_TEXT_CODECS:
                     vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
                     try:
                         subprocess.run([
@@ -255,11 +269,11 @@ def extract_tracks(movie: dict) -> dict:
                                 "label":    title or _lang_label(lang),
                                 "url":      f"/track/subs/{movie_id}/{subs_idx}",
                             })
-                            print(f"   ✓ Sous-titres {lang} : {title or codec}")
+                            print(f"Sous-titres {lang} : {title or codec}")
                     except Exception as e:
-                        print(f"   ⚠ Échec sous-titres {subs_idx} : {e}")
+                        print(f"Échec sous-titres {subs_idx} : {e}")
                 else:
-                    print(f"   ⏭  Sous-titres image ({codec}) ignorés")
+                    print(f"Sous-titres image ({codec}) ignorés")
                 subs_idx += 1
 
         # Sous-titres externes
@@ -276,7 +290,6 @@ def extract_tracks(movie: dict) -> dict:
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 try:
                     if ext == '.vtt':
-                        import shutil
                         shutil.copy(sub_file, vtt_path)
                     else:
                         subprocess.run([
@@ -290,10 +303,10 @@ def extract_tracks(movie: dict) -> dict:
                             "label":    f"{_lang_label(lang)} (externe)",
                             "url":      f"/track/subs/{movie_id}/{external_idx}",
                         })
-                        print(f"   ✓ Sous-titres externes : {sub_file.name} ({lang})")
+                        print(f"Sous-titres externes : {sub_file.name} ({lang})")
                         subs_idx += 1
                 except Exception as e:
-                    print(f"   ⚠ Échec sous-titres externes {sub_file.name} : {e}")
+                    print(f"Échec sous-titres externes {sub_file.name} : {e}")
 
             simple_sub = movie_dir / f"{movie_stem}{ext}"
             if simple_sub.exists():
@@ -301,7 +314,6 @@ def extract_tracks(movie: dict) -> dict:
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 try:
                     if ext == '.vtt':
-                        import shutil
                         shutil.copy(simple_sub, vtt_path)
                     else:
                         subprocess.run([
@@ -315,10 +327,10 @@ def extract_tracks(movie: dict) -> dict:
                             "label":    "Sous-titres (externe)",
                             "url":      f"/track/subs/{movie_id}/{external_idx}",
                         })
-                        print(f"   ✓ Sous-titres externes : {simple_sub.name}")
+                        print(f"Sous-titres externes : {simple_sub.name}")
                         subs_idx += 1
                 except Exception as e:
-                    print(f"   ⚠ Échec sous-titres externes {simple_sub.name} : {e}")
+                    print(f"Échec sous-titres externes {simple_sub.name} : {e}")
 
         metadata = {
             "audio_tracks":    audio_tracks,
@@ -328,14 +340,13 @@ def extract_tracks(movie: dict) -> dict:
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-        print(f"   ✅ {len(audio_tracks)} piste(s) audio, {len(subtitle_tracks)} sous-titre(s)")
+        print(f"    {len(audio_tracks)} piste(s) audio, {len(subtitle_tracks)} sous-titre(s)")
         return metadata
 
 
 def clear_tracks_cache(movie_id: str):
     cache_dir = TRACKS_CACHE_DIR / movie_id
     if cache_dir.exists():
-        import shutil
         shutil.rmtree(cache_dir)
 
 
@@ -389,14 +400,14 @@ def _fetch_tmdb_tv(title: str) -> dict | None:
         results = r.json().get("results", [])
         if results:
             result = _tmdb_format(results[0], title_key="name")
-            print(f"📺 TMDB (série) : '{clean}' → '{results[0].get('name')}'")
+            print(f"TMDB (série) : '{clean}' → '{results[0].get('name')}'")
         else:
             result = None
-            print(f"❌ TMDB (série) : '{clean}' → aucun résultat")
+            print(f"TMDB (série) : '{clean}' → aucun résultat")
         _tmdb_cache[key] = result
         return result
     except Exception as e:
-        print(f"⚠  TMDB série échec : {e}")
+        print(f"TMDB série échec : {e}")
         return None
 
 
@@ -417,14 +428,14 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
             results = r.json().get("results", [])
         if results:
             result = _tmdb_format(results[0], title_key="title")
-            print(f"✅ TMDB : '{query}' → '{results[0].get('title')}'")
+            print(f"TMDB : '{query}' → '{results[0].get('title')}'")
         else:
             result = None
-            print(f"❌ TMDB : '{query}' ({year}) → aucun résultat")
+            print(f"TMDB : '{query}' ({year}) → aucun résultat")
         _tmdb_cache[key] = result
         return result
     except Exception as e:
-        print(f"⚠  TMDB échec pour '{query}' : {e}")
+        print(f"TMDB échec pour '{query}' : {e}")
         return None
 
 
@@ -437,24 +448,24 @@ def scan_movies() -> list:
     series_groups = {}
 
     if not MOVIES_DIR.exists():
-        print(f"⚠  Dossier introuvable : {MOVIES_DIR}")
+        print(f"Dossier introuvable : {MOVIES_DIR}")
         return items
 
     for filepath in sorted(MOVIES_DIR.rglob("*")):
         if filepath.suffix.lower() not in SUPPORTED_EXTS:
             continue
-        if filepath.name.startswith("."):
+        try:
+            rel = filepath.relative_to(MOVIES_DIR)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
             continue
 
         movie_id = str(hash(str(filepath)) & 0xFFFFFFFF)
         tags = extract_tags(filepath.name)
         ep = parse_episode(filepath.name)
 
-        try:
-            rel = filepath.relative_to(MOVIES_DIR)
-            category = rel.parts[0] if len(rel.parts) > 1 else "Films"
-        except ValueError:
-            category = "Films"
+        category = rel.parts[0] if len(rel.parts) > 1 else "Films"
 
         common = {
             "id":         movie_id,
@@ -521,7 +532,7 @@ def scan_movies() -> list:
                          if (it["kind"] == "series" and f"TV|{it['title']}" not in _tmdb_cache)
                          or (it["kind"] == "movie" and f"{re.sub(_YEAR_PATTERN, '', it['title']).strip()}|{it.get('year') or ''}" not in _tmdb_cache))
     if to_fetch_count:
-        print(f"🎞  Recherche TMDB pour {to_fetch_count} entrée(s)...")
+        print(f"Recherche TMDB pour {to_fetch_count} entrée(s)...")
 
     with ThreadPoolExecutor(max_workers=10) as ex:
         results = list(ex.map(fetch_for_item, items))
@@ -544,9 +555,9 @@ def get_movies() -> list:
     global _movies_cache
     with _movies_lock:
         if _movies_cache is None:
-            print("🔍 Scan des films en cours...")
+            print("Scan des films en cours...")
             _movies_cache = scan_movies()
-            print(f"✅ {len(_movies_cache)} film(s) trouvé(s)")
+            print(f" {len(_movies_cache)} film(s) trouvé(s)")
         return _movies_cache
 
 
@@ -573,34 +584,161 @@ MIME_MAP = {
 
 
 def _stream_file_ranged(filepath: str, mimetype: str):
-    file_size = os.path.getsize(filepath)
-    range_header = request.headers.get("Range")
-    if not range_header:
-        return send_file(filepath, mimetype=mimetype, conditional=True)
+    # Werkzeug gère les Range nativement + sendfile() noyau (zéro-copie)
+    return send_file(filepath, mimetype=mimetype, conditional=True)
 
-    match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-    start = int(match.group(1))
-    end   = int(match.group(2)) if match.group(2) else file_size - 1
-    length = end - start + 1
 
-    def generate():
-        with open(filepath, "rb") as f:
-            f.seek(start)
-            remaining = length
-            while remaining:
-                chunk = f.read(min(67108864, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
+# ─── REMUX AUDIO À LA DEMANDE (cache disque, lecture instantanée + seek) ─────
 
-    headers = {
-        "Content-Range":  f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges":  "bytes",
-        "Content-Length": str(length),
-        "Content-Type":   mimetype,
-    }
-    return Response(generate(), status=206, headers=headers)
+_audio_remux_state = {}
+_audio_remux_lock = threading.Lock()
+
+
+def _audio_cache_path(movie_id: str, audio_idx: int) -> Path:
+    return TRACKS_CACHE_DIR / movie_id / f"audio_{audio_idx}.mp4"
+
+
+def _audio_tmp_path(movie_id: str, audio_idx: int) -> Path:
+    return TRACKS_CACHE_DIR / movie_id / f"audio_{audio_idx}.mp4.tmp"
+
+
+def _start_audio_remux(movie: dict, audio_idx: int) -> dict:
+    """
+    Lance (ou poursuit) le remux d'une piste audio alternative dans un MP4 cache.
+    Retourne l'état courant : {status: ready|preparing|error, progress: 0..1}.
+    """
+    movie_id = movie["id"]
+    filepath = movie["path"]
+    out_path = _audio_cache_path(movie_id, audio_idx)
+    tmp_path = _audio_tmp_path(movie_id, audio_idx)
+    key = f"{movie_id}:{audio_idx}"
+
+    with _audio_remux_lock:
+        if out_path.exists() and out_path.stat().st_size > 0:
+            return {"status": "ready", "progress": 1.0}
+
+        state = _audio_remux_state.get(key)
+        if state and state["status"] == "preparing":
+            proc = state.get("process")
+            if proc is not None and proc.poll() is None:
+                progress = 0.0
+                if tmp_path.exists():
+                    try:
+                        src_size = os.path.getsize(filepath)
+                        progress = min(0.99, tmp_path.stat().st_size / max(src_size, 1))
+                    except Exception:
+                        progress = 0.0
+                state["progress"] = progress
+                return {"status": "preparing", "progress": progress}
+            if out_path.exists() and out_path.stat().st_size > 0:
+                _audio_remux_state[key] = {"status": "ready", "progress": 1.0}
+                return {"status": "ready", "progress": 1.0}
+            _audio_remux_state[key] = {"status": "error", "progress": 0.0}
+            return {"status": "error", "progress": 0.0}
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-select_streams", f"a:{audio_idx}",
+                "-show_streams", str(filepath)
+            ], capture_output=True, text=True, timeout=10)
+            track_codec = json.loads(result.stdout).get("streams", [{}])[0].get("codec_name", "")
+        except Exception:
+            track_codec = ""
+
+        try:
+            vresult = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-select_streams", "v:0",
+                "-show_streams", str(filepath)
+            ], capture_output=True, text=True, timeout=10)
+            vcodec = json.loads(vresult.stdout).get("streams", [{}])[0].get("codec_name", "")
+        except Exception:
+            vcodec = ""
+
+        if track_codec in AUDIO_OK:
+            a_args = ["-c:a", "copy"]
+            if track_codec == "aac":
+                a_args += ["-bsf:a", "aac_adtstoasc"]
+        else:
+            a_args = ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
+
+        v_args = ["-c:v", "copy"]
+        if vcodec in {"hevc", "h265"}:
+            v_args += ["-tag:v", "hvc1"]
+
+        print(f"Remux piste audio {audio_idx} (vidéo={vcodec or '?'}, audio={track_codec or '?'}) : {movie['filename']}")
+        log_path = out_path.parent / f"audio_{audio_idx}.log"
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(filepath),
+            "-map", "0:v:0", *v_args,
+            "-map", f"0:a:{audio_idx}", *a_args,
+            "-sn", "-dn",
+            "-movflags", "+faststart",
+            "-f", "mp4",
+            str(tmp_path)
+        ]
+        try:
+            log_fh = open(log_path, "wb")
+        except Exception:
+            log_fh = subprocess.DEVNULL
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_fh)
+
+        def _watch():
+            proc.wait()
+            if hasattr(log_fh, "close"):
+                try:
+                    log_fh.close()
+                except Exception:
+                    pass
+            with _audio_remux_lock:
+                if tmp_path.exists() and tmp_path.stat().st_size > 0 and proc.returncode == 0:
+                    try:
+                        tmp_path.rename(out_path)
+                        _audio_remux_state[key] = {"status": "ready", "progress": 1.0}
+                        print(f"Remux prêt : audio_{audio_idx}.mp4")
+                        return
+                    except Exception as e:
+                        print(f"Renommage échoué : {e}")
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
+                _audio_remux_state[key] = {"status": "error", "progress": 0.0}
+                err_excerpt = ""
+                try:
+                    if log_path.exists():
+                        err_excerpt = log_path.read_text(errors="replace").strip().splitlines()[-5:]
+                        err_excerpt = "\n      " + "\n      ".join(err_excerpt) if err_excerpt else ""
+                except Exception:
+                    pass
+                print(f"Échec remux piste audio {audio_idx} (code {proc.returncode}){err_excerpt}")
+                print(f"Log complet : {log_path}")
+
+        threading.Thread(target=_watch, daemon=True).start()
+        _audio_remux_state[key] = {"status": "preparing", "progress": 0.0, "process": proc}
+        return {"status": "preparing", "progress": 0.0}
+
+
+def _ensure_audio_ready(movie: dict, audio_idx: int, timeout: float = 1800.0) -> Path | None:
+    """Bloque jusqu'à ce que le MP4 remuxé soit prêt. Retourne le chemin ou None."""
+    deadline = time.time() + timeout
+    state = _start_audio_remux(movie, audio_idx)
+    while state["status"] == "preparing" and time.time() < deadline:
+        time.sleep(0.5)
+        state = _start_audio_remux(movie, audio_idx)
+    if state["status"] == "ready":
+        return _audio_cache_path(movie["id"], audio_idx)
+    return None
 
 
 def _transcode_stream(filepath: str, v_arg: list, a_arg: list):
@@ -671,6 +809,15 @@ def api_tracks_refresh(movie_id):
     return jsonify(extract_tracks(movie))
 
 
+@app.route("/api/audio_status/<movie_id>/<int:idx>")
+def api_audio_status(movie_id, idx):
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return jsonify({"status": "error", "message": "Film introuvable"}), 404
+    state = _start_audio_remux(movie, idx)
+    return jsonify({k: v for k, v in state.items() if k != "process"})
+
+
 @app.route("/track/subs/<movie_id>/<int:idx>")
 def serve_subs(movie_id, idx):
     vtt_path = TRACKS_CACHE_DIR / movie_id / f"subs_{idx}.vtt"
@@ -685,7 +832,7 @@ def serve_subs(movie_id, idx):
 def stream_video(movie_id):
     """
     Stream pour lecture navigateur.
-    ?audio=N : sélectionne une piste audio spécifique (transcodage).
+    ?audio=N : sélectionne une piste audio spécifique (remux cache, seekable).
     Sans paramètre : fichier brut (chargement instantané).
     """
     movie = get_movie_by_id(movie_id)
@@ -696,31 +843,11 @@ def stream_video(movie_id):
     audio_idx = request.args.get("audio", default=None, type=int)
 
     if audio_idx is not None:
-        # Probe le codec de la piste demandée
-        try:
-            result = subprocess.run([
-                "ffprobe", "-v", "quiet", "-print_format", "json",
-                "-select_streams", f"a:{audio_idx}",
-                "-show_streams", str(filepath)
-            ], capture_output=True, text=True, timeout=10)
-            track_codec = json.loads(result.stdout).get("streams", [{}])[0].get("codec_name", "")
-        except Exception:
-            track_codec = ""
-
-        if track_codec in BROWSER_AUDIO_OK:
-            # Déjà compatible → remux (rapide)
-            print(f"🖥️  PC piste {audio_idx} ({track_codec}, remux) : {movie['filename']}")
-            a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "copy"]
-        else:
-            # Incompatible → ré-encodage AAC
-            print(f"🖥️  PC piste {audio_idx} ({track_codec} → AAC) : {movie['filename']}")
-            a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-
-        return _transcode_stream(
-            filepath,
-            v_arg=["-map", "0:v:0", "-c:v", "copy"],
-            a_arg=a_arg
-        )
+        out_path = _ensure_audio_ready(movie, audio_idx)
+        if out_path is None:
+            return Response("Échec préparation de la piste audio", status=500)
+        print(f"PC piste {audio_idx} (remux cache) : {movie['filename']}")
+        return _stream_file_ranged(str(out_path), "video/mp4")
 
     mimetype = MIME_MAP.get(movie["ext"], "video/mp4")
     return _stream_file_ranged(filepath, mimetype)
@@ -745,6 +872,14 @@ def cast_video(movie_id):
 
     video_ok = codecs["video"] in VIDEO_OK
 
+    # Piste audio alternative + vidéo h264 → utilise le remux cache (seekable)
+    if audio_idx is not None and video_ok:
+        out_path = _ensure_audio_ready(movie, audio_idx)
+        if out_path is None:
+            return Response("Échec préparation de la piste audio", status=500)
+        print(f"Cast piste audio {audio_idx} (remux cache) : {movie['filename']}")
+        return _stream_file_ranged(str(out_path), "video/mp4")
+
     # Argument vidéo
     v_arg = ["-map", "0:v:0", "-c:v", "copy"] if video_ok else [
         "-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
@@ -753,18 +888,18 @@ def cast_video(movie_id):
     # Argument audio : piste spécifique ou piste par défaut
     if audio_idx is not None:
         a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-        print(f"📺 Cast piste audio {audio_idx} : {movie['filename']}")
+        print(f"Cast piste audio {audio_idx} (transcodage vidéo) : {movie['filename']}")
     else:
         audio_ok = codecs["audio"] in AUDIO_OK
         if video_ok and audio_ok:
-            print(f"📺 Cast direct : {movie['filename']}")
-            return redirect(f"/stream/{movie_id}", code=302)
+            print(f"Cast direct : {movie['filename']}")
+            return _stream_file_ranged(filepath, MIME_MAP.get(movie["ext"], "video/mp4"))
         a_arg = ["-map", "0:a:0", "-c:a", "copy"] if audio_ok else [
             "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"
         ]
-        print(f"📺 Cast transcodage : {movie['filename']}")
-        print(f"   Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
-        print(f"   Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
+        print(f"Cast transcodage : {movie['filename']}")
+        print(f"Vidéo {codecs['video']} → {'copy' if video_ok else 'H.264'}")
+        print(f"Audio {codecs['audio']} → {'copy' if audio_ok else 'AAC'}")
 
     return _transcode_stream(filepath, v_arg, a_arg)
 
@@ -776,21 +911,50 @@ _current_player = None
 
 @app.route("/play/<movie_id>", methods=["POST"])
 def play_local(movie_id):
+    """
+    Lecture sur la sortie HDMI du Pi via MPV, en plein écran.
+    Paramètres optionnels (query string) :
+      ?audio=N  → index de la piste audio (0-based, tel que renvoyé par /api/tracks)
+      ?sub=M    → index du sous-titre (0-based interne, ou >=1000 pour un fichier externe)
+                  absent = aucun sous-titre
+    """
     global _current_player
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"status": "error", "message": "Film introuvable"}), 404
 
+    audio_idx = request.args.get("audio", default=None, type=int)
+    sub_idx   = request.args.get("sub",   default=None, type=int)
+
     if _current_player and _current_player.poll() is None:
         _current_player.terminate()
 
-    _current_player = subprocess.Popen([
+    mpv_cmd = [
         "mpv", "--fullscreen", "--hwdec=auto", "--no-osc",
         "--no-input-default-bindings",
-        movie["path"]
-    ], env={**os.environ, "DISPLAY": ":0"})
+    ]
 
-    print(f"🎬 Lecture locale : {movie['filename']}")
+    # Piste audio : MPV utilise un identifiant 1-based, notre index est 0-based
+    if audio_idx is not None:
+        mpv_cmd.append(f"--aid={audio_idx + 1}")
+
+    # Sous-titres
+    if sub_idx is None:
+        mpv_cmd.append("--sid=no")
+    elif sub_idx >= 1000:
+        # Sous-titre externe : on charge le VTT mis en cache
+        vtt_path = TRACKS_CACHE_DIR / movie_id / f"subs_{sub_idx}.vtt"
+        if vtt_path.exists():
+            mpv_cmd.append(f"--sub-file={vtt_path}")
+    else:
+        # Sous-titre interne : MPV 1-based
+        mpv_cmd.append(f"--sid={sub_idx + 1}")
+
+    mpv_cmd.append(movie["path"])
+
+    _current_player = subprocess.Popen(mpv_cmd, env={**os.environ, "DISPLAY": ":0"})
+
+    print(f"Lecture locale : {movie['filename']} (audio={audio_idx}, sub={sub_idx})")
     return jsonify({"status": "ok", "playing": movie["title"]})
 
 
@@ -810,11 +974,11 @@ def stop_local():
 
 if __name__ == "__main__":
     print("━" * 60)
-    print("🎬  CineLocal — Serveur de films local")
-    print(f"📁  Dossier films : {MOVIES_DIR}")
-    print(f"🌐  Interface     : http://localhost:{PORT}")
-    print(f"📺  Pour TV/Cast  : http://<ton-ip>:{PORT}")
+    print("CineLocal — Serveur de films local")
+    print(f"Dossier films : {MOVIES_DIR}")
+    print(f"Interface     : http://localhost:{PORT}")
+    print(f"Pour TV/Cast  : http://<ton-ip>:{PORT}")
     print("━" * 60)
 
     get_movies()
-    app.run(host=HOST, port=PORT, debug=False, threaded=True)
+    serve(app, host=HOST, port=PORT, threads=8)
