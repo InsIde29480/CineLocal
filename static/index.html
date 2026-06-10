@@ -29,11 +29,11 @@
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button>
-        <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️ TV directe</button>
+        <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button>
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
-      <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹ Stop TV</button>
+      <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹<span class="btn-label"> Stop TV</span></button>
     </div>
   </nav>
 
@@ -79,9 +79,6 @@
           <div class="loading-step" id="stepVideo"></div>
           <div class="loading-step" id="stepTracks"></div>
         </div>
-      </div>
-      <div class="audio-selector" id="audioSelector">
-        <div class="audio-selector-label">▣ PISTE AUDIO</div>
       </div>
     </div>
   </div>

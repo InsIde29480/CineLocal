@@ -83,13 +83,16 @@ _EDITION_TAGS = (
 
 def clean_title(filename: str) -> str:
     name = Path(filename).stem
-    name = re.sub(r'_(?:PC|TV|VF|EN)(?=_|$|\.)', '', name, flags=re.IGNORECASE)
     year_match = re.search(_YEAR_PATTERN, name)
     if year_match:
         name = name[:year_match.end()]
     name = re.sub(_RELEASE_TAGS, '', name, flags=re.IGNORECASE)
     name = re.sub(_EDITION_TAGS, '', name, flags=re.IGNORECASE)
-    name = re.sub(r'[-_][a-zA-Z0-9]+$', '', name)
+    # Tag de groupe en fin de nom (ex. "-RARBG", "-x264") : retiré uniquement
+    # après un tiret et seulement si ça ressemble à un tag (chiffres ou deux
+    # majuscules consécutives), pour ne pas amputer un vrai titre
+    # ("Le_Grand_Bleu", "Blade-Runner", "Spider-Man"...).
+    name = re.sub(r'-[A-Za-z0-9]*(?:\d|[A-Z]{2})[A-Za-z0-9]*$', '', name)
     name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', name)
     name = re.sub(r'[\(\[\{].*$', '', name)
     name = re.sub(r'[._]+', ' ', name)
@@ -100,14 +103,6 @@ def clean_title(filename: str) -> str:
 def extract_year(filename: str) -> str | None:
     match = re.search(_YEAR_PATTERN, filename)
     return match.group(1) if match else None
-
-
-def extract_tags(filename: str) -> dict:
-    stem = Path(filename).stem
-    lang = "vf" if re.search(r'_VF(?=_|$|\.)', stem, re.IGNORECASE) else "en"
-    device = "tv" if re.search(r'_TV(?=_|$|\.)', stem, re.IGNORECASE) else "pc"
-    is_series = bool(re.search(r'[Ss]\d{1,2}[Ee]\d{1,2}', stem))
-    return {"lang": lang, "device": device, "kind": "tv" if is_series else "movie"}
 
 
 def parse_episode(filename: str) -> dict | None:
@@ -122,7 +117,6 @@ def series_title(filename: str) -> str:
     name = re.sub(r'[Ss]\d{1,2}[Ee]\d{1,2}.*$', '', name)
     name = re.sub(r'\(?\b(19[5-9]\d|20[0-3]\d)\b\)?', '', name)
     name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', name)
-    name = re.sub(r'_(?:PC|TV|VF|EN)(?=_|$|\.)', '', name, flags=re.IGNORECASE)
     name = re.sub(r'[._\-]+', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
     name = re.sub(r'\s*-\s*$', '', name).strip()
@@ -462,7 +456,6 @@ def scan_movies() -> list:
             continue
 
         movie_id = str(hash(str(filepath)) & 0xFFFFFFFF)
-        tags = extract_tags(filepath.name)
         ep = parse_episode(filepath.name)
 
         category = rel.parts[0] if len(rel.parts) > 1 else "Films"
@@ -476,13 +469,13 @@ def scan_movies() -> list:
             "path":       str(filepath),
             "stream_url": f"/stream/{movie_id}",
             "cast_url":   f"/cast/{movie_id}",
-            "lang":       tags["lang"],
-            "device":     tags["device"],
         }
 
         if ep:
             stitle = series_title(filepath.name)
-            group_key = f"{stitle}|{tags['device']}|{tags['lang']}"
+            # Plus de séparation par langue/appareil : tous les épisodes
+            # d'une même série sont regroupés ensemble.
+            group_key = stitle
             episode_data = {
                 **common,
                 "season":  ep["season"],
@@ -492,7 +485,7 @@ def scan_movies() -> list:
             if group_key not in series_groups:
                 series_groups[group_key] = {
                     "stitle": stitle, "category": category,
-                    "tags": tags, "episodes": [],
+                    "episodes": [],
                 }
             series_groups[group_key]["episodes"].append(episode_data)
         else:
@@ -515,8 +508,6 @@ def scan_movies() -> list:
             "size_mb":     sum(e["size_mb"] for e in group["episodes"]),
             "ext":         group["episodes"][0]["ext"],
             "kind":        "series",
-            "lang":        group["tags"]["lang"],
-            "device":      group["tags"]["device"],
             "episodes":    group["episodes"],
             "episode_count": len(group["episodes"]),
             "season_count": len({e["season"] for e in group["episodes"]}),
