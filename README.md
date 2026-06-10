@@ -101,18 +101,6 @@ Les fichiers `style.css` et `app.js` sont servis automatiquement depuis `static/
 
 ## Convention de nommage des fichiers
 
-Le serveur déduit des informations à partir du nom des fichiers :
-
-| Suffixe / motif | Effet |
-|-----------------|-------|
-| `_VF`           | Marque le fichier comme version française |
-| `_EN`           | Version originale / anglaise (par défaut si absent) |
-| `SxxExx`        | Détecté comme épisode de série (ex. `S01E03`) |
-
-Les films sont rangés par **sous-dossier** (le premier niveau sous `MOVIES_DIR`
-devient la catégorie ; sinon « Films »). Les épisodes partageant le même titre
-de série sont regroupés automatiquement par saison.
-
 Les sous-titres externes sont détectés s'ils portent le **même nom** que la vidéo :
 `Film.srt`, `Film.fr.srt`, `Film.en.srt`, etc.
 
