@@ -32,7 +32,7 @@ SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
 PORT             = 8765
 
-TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
+TMDB_API_KEY     = "ADD_TMBD_API_KEY_HERE"
 
 VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
