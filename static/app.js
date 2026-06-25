@@ -13,11 +13,14 @@ var currentSeries = null;
 var currentSeason = null;
 
 // État Cast / options de lecture
-var optionsTarget     = 'cast';   // 'cast' = Chromecast, 'local' = MPV sur la TV du Pi
+var optionsTarget     = 'cast';   // 'pc' = navigateur, 'cast' = Chromecast, 'local' = MPV sur la TV du Pi
 var castMoviePending  = null;
 var castTracks        = null;
 var castSelectedAudio = 0;
 var castSelectedSub   = null;
+var optQualities      = [];       // variantes de qualité du titre courant
+var optSelectedQuality = 0;       // index dans optQualities
+var optLaunchToken    = 0;        // incrémenté à chaque ouverture (anti-course)
 var pendingCastMovie  = null;
 var pendingAudioIdx   = null;
 var pendingSubTrack   = null;
@@ -32,8 +35,6 @@ function setMode(mode) {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
   document.getElementById('castBtn').style.display = (mode === 'tv') ? '' : 'none';
-  document.getElementById('heroPrimaryLabel').textContent =
-    mode === 'tv' ? 'CASTER' : mode === 'local' ? 'TV DIRECTE' : 'LIRE';
   if (mode === 'tv' && !castSdkLoaded) loadCastSdk();
   if (mode !== 'pc') closePlayer();
   if (allMovies.length) applyFilters();
@@ -155,55 +156,125 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MODAL OPTIONS (Chromecast ou TV directe)
+// MODAL OPTIONS (PC navigateur / Chromecast / TV directe)
 // ═══════════════════════════════════════════════════════════════════
-function startCast(movie) {
-  optionsTarget = 'cast';
-  currentMovie = movie;
-  openCastOptions(movie);
-}
-
-function startLocal(movie) {
-  optionsTarget = 'local';
-  currentMovie = movie;
-  openCastOptions(movie);
-}
-
-function openCastOptions(movie) {
-  castMoviePending  = movie;
+function openOptions(movie, target) {
+  optionsTarget    = target;
+  currentMovie     = movie;
+  castMoviePending = movie;
   castSelectedAudio = 0;
   castSelectedSub   = null;
   castTracks        = null;
+  optLaunchToken++;
 
-  var isCast = (optionsTarget === 'cast');
-  document.getElementById('optionsTitle').textContent  = isCast ? '📺 Options Cast' : '📽️ Options TV directe';
-  document.getElementById('btnLaunchLabel').textContent = isCast ? '📺 Lancer le Cast' : '📽️ Lire sur la TV';
+  // Variantes de qualité (4K / 1080p…). Les épisodes et les films à un seul
+  // fichier n'en ont pas : on en synthétise une seule (pas de choix affiché).
+  optQualities = (movie.qualities && movie.qualities.length)
+    ? movie.qualities.slice()
+    : [{ id: movie.id, label: '', height: 0, size_mb: movie.size_mb, ext: movie.ext }];
+  optSelectedQuality = 0;
+
+  var titles = {
+    pc:    ['🎞️ Choix de la qualité', '▶ Lire'],
+    cast:  ['📺 Options Cast',         '📺 Lancer le Cast'],
+    local: ['📽️ Options TV directe',   '📽️ Lire sur la TV'],
+  };
+  document.getElementById('optionsTitle').textContent   = titles[target][0];
+  document.getElementById('btnLaunchLabel').textContent = titles[target][1];
 
   document.getElementById('castOptionsFilm').textContent = movie.title;
+  document.getElementById('cast-options-modal').classList.add('open');
+
+  if (target === 'pc') {
+    // PC : audio et sous-titres sont gérés nativement par le lecteur du
+    // navigateur. On ne propose donc QUE la qualité, sans charger les pistes.
+    castTracks = { audio_tracks: [], subtitle_tracks: [] };
+    renderCastOptions();
+    document.getElementById('btnCastLaunch').disabled = false;
+    return;
+  }
+
+  loadTracksForQuality();
+}
+
+// Wrappers conservés pour compat (appelés ailleurs)
+function startCast(movie)  { openOptions(movie, 'cast'); }
+function startLocal(movie) { openOptions(movie, 'local'); }
+
+function _selectedQuality() {
+  return optQualities[optSelectedQuality] || optQualities[0];
+}
+
+function loadTracksForQuality() {
+  var q = _selectedQuality();
+  var myToken = optLaunchToken;
+  castTracks = null;
   document.getElementById('castOptionsBody').innerHTML =
     '<div class="cast-loading-msg">⏳ Chargement des pistes…</div>';
   document.getElementById('btnCastLaunch').disabled = true;
-  document.getElementById('cast-options-modal').classList.add('open');
 
-  fetch('/api/tracks/' + movie.id)
+  fetch('/api/tracks/' + q.id)
     .then(function (r) { return r.json(); })
     .then(function (data) {
+      if (optLaunchToken !== myToken) return;   // qualité ou film changé entre-temps
       castTracks = data;
       renderCastOptions();
       document.getElementById('btnCastLaunch').disabled = false;
     })
     .catch(function () {
+      if (optLaunchToken !== myToken) return;
       castTracks = { audio_tracks: [], subtitle_tracks: [] };
       renderCastOptions();
       document.getElementById('btnCastLaunch').disabled = false;
     });
 }
 
+function selectQuality(idx) {
+  if (idx === optSelectedQuality) return;
+  optSelectedQuality = idx;
+  castSelectedAudio = 0;
+  castSelectedSub   = null;
+  // PC : audio/sous-titres natifs, aucune piste à recharger.
+  if (optionsTarget === 'pc') { renderCastOptions(); return; }
+  // Cast / TV : les pistes audio/sous-titres peuvent différer selon la
+  // qualité ; on recharge celles du fichier choisi.
+  optLaunchToken++;            // invalide une éventuelle requête de pistes en cours
+  loadTracksForQuality();
+}
+
 function renderCastOptions() {
   if (!castTracks) return;
   var audio = castTracks.audio_tracks || [];
   var subs  = castTracks.subtitle_tracks || [];
+  var pcQualityOnly = (optionsTarget === 'pc');
   var html  = '';
+
+  // Section qualité (seulement s'il y a plusieurs variantes du même film)
+  if (optQualities.length > 1) {
+    html += '<div class="cast-section"><div class="cast-section-label">🎞️ Qualité</div>';
+    optQualities.forEach(function (q, i) {
+      var sel  = (i === optSelectedQuality) ? 'selected' : '';
+      var ext  = q.ext ? q.ext.replace('.', '').toUpperCase() : '';
+      var size = q.size_mb
+        ? (q.size_mb >= 1024 ? (Math.round(q.size_mb / 102.4) / 10 + ' Go') : (q.size_mb + ' Mo'))
+        : '';
+      var meta = [ext, size].filter(Boolean).join(' · ');
+      html += '<div class="cast-option-row ' + sel + '" onclick="selectQuality(' + i + ')">'
+        + '<div class="cast-option-radio"><div class="cast-option-radio-dot"></div></div>'
+        + '<div class="cast-option-text">'
+        + '<div class="cast-option-name">' + escHtml(q.label || 'Vidéo') + '</div>'
+        + (meta ? '<div class="cast-option-meta">' + meta + '</div>' : '')
+        + '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  // En mode PC, on s'arrête à la qualité : le navigateur gère lui-même
+  // l'audio et les sous-titres via son lecteur natif.
+  if (pcQualityOnly) {
+    document.getElementById('castOptionsBody').innerHTML = html;
+    return;
+  }
 
   // Section audio
   if (audio.length > 0) {
@@ -258,15 +329,48 @@ function selectCastSub(idx) {
 }
 
 function closeCastOptions() {
+  optLaunchToken++;   // invalide tout chargement de pistes / préparation en cours
   document.getElementById('cast-options-modal').classList.remove('open');
   castMoviePending = null;
 }
 
 function launchOptions() {
-  if (optionsTarget === 'local') launchLocal();
-  else                           launchCast();
+  if (optionsTarget === 'pc')         launchPc();
+  else if (optionsTarget === 'local') launchLocal();
+  else                                launchCast();
 }
 
+// Construit l'objet à lire : le film courant mais avec l'id et l'extension de
+// la variante de qualité sélectionnée (c'est cet id de fichier que la lecture,
+// le cast et le remux utilisent).
+function _playItem() {
+  var q = _selectedQuality();
+  return Object.assign({}, castMoviePending, { id: q.id, ext: q.ext || castMoviePending.ext });
+}
+
+// Index réel (0-based) de la piste audio choisie ; 0 = piste par défaut.
+function _chosenAudioIdx() {
+  var t = castTracks && castTracks.audio_tracks[castSelectedAudio];
+  return t ? t.index : 0;
+}
+
+function _chosenSubTrack() {
+  return (castSelectedSub !== null && castTracks)
+    ? castTracks.subtitle_tracks[castSelectedSub]
+    : null;
+}
+
+// ─── LANCEMENT PC (navigateur) ────────────────────────────────────────────
+function launchPc() {
+  if (!castMoviePending) return;
+  var play     = _playItem();
+  var audioIdx = _chosenAudioIdx();
+  var subTrack = _chosenSubTrack();
+  closeCastOptions();
+  playPc(play, audioIdx, subTrack);
+}
+
+// ─── LANCEMENT CHROMECAST ─────────────────────────────────────────────────
 function launchCast() {
   if (!castMoviePending) return;
 
@@ -275,25 +379,21 @@ function launchCast() {
     return;
   }
 
-  var movie    = castMoviePending;
-  var audioIdx = castSelectedAudio;
-  var subTrack = (castSelectedSub !== null && castTracks)
-    ? castTracks.subtitle_tracks[castSelectedSub]
-    : null;
+  var play     = _playItem();
+  var audioIdx = _chosenAudioIdx();
+  var subTrack = _chosenSubTrack();
 
   // Piste audio principale : le serveur sert le fichier directement
   // (ou transcode à la volée), on peut lancer tout de suite.
   if (audioIdx === 0) {
     closeCastOptions();
-    doCast(movie, audioIdx, subTrack);
+    doCast(play, audioIdx, subTrack);
     return;
   }
 
   // Piste audio alternative : le serveur doit d'abord terminer le remux
-  // en MP4 (cache). Si on lançait le Cast immédiatement, le Chromecast
-  // attendrait la réponse pendant tout le remux et abandonnerait (timeout).
-  // On attend donc que la piste soit prête, comme en mode PC.
-  prepareAudioThenCast(movie, audioIdx, subTrack);
+  // en MP4 (cache), sinon le Chromecast abandonnerait (timeout).
+  prepareAudioThenCast(play, audioIdx, subTrack);
 }
 
 function doCast(movie, audioIdx, subTrack) {
@@ -310,15 +410,12 @@ function doCast(movie, audioIdx, subTrack) {
 function prepareAudioThenCast(movie, audioIdx, subTrack) {
   var btn   = document.getElementById('btnCastLaunch');
   var label = document.getElementById('btnLaunchLabel');
+  var myToken = optLaunchToken;
   btn.disabled = true;
   label.textContent = '⏳ Préparation de la piste…';
 
   // Pas encore de session : on ouvre le sélecteur de Chromecast TOUT DE
-  // SUITE, tant que le clic de l'utilisateur est encore « frais ». Si on
-  // attendait la fin du remux (plusieurs minutes), Chrome ignorerait le
-  // .click() programmé et rien ne se passerait. L'utilisateur choisit donc
-  // sa TV pendant que le serveur prépare la piste ; la lecture démarre
-  // automatiquement dès que les deux sont prêts.
+  // SUITE, tant que le clic de l'utilisateur est encore « frais ».
   if (!castSession) {
     document.getElementById('castBtn').click();
   }
@@ -334,24 +431,18 @@ function prepareAudioThenCast(movie, audioIdx, subTrack) {
   }
 
   function poll() {
-    // Modale fermée ou autre film ouvert entre-temps : on arrête le suivi
-    // (le remux continue côté serveur et restera en cache pour plus tard).
-    if (castMoviePending !== movie) { restore(); return; }
+    if (optLaunchToken !== myToken) { restore(); return; }   // modale fermée / changée
 
     fetch('/api/audio_status/' + movie.id + '/' + audioIdx)
       .then(function (r) { return r.json(); })
       .then(function (state) {
-        if (castMoviePending !== movie) { restore(); return; }
+        if (optLaunchToken !== myToken) { restore(); return; }
         if (state.status === 'ready') {
           if (castSession) {
             restore();
             closeCastOptions();
             sendToCast(movie, audioIdx, subTrack);
           } else {
-            // Piste prête mais Chromecast pas encore connecté : la lecture
-            // partira automatiquement à l'ouverture de la session (via
-            // pendingCastMovie). Si le sélecteur a été refermé, un nouveau
-            // clic sur le bouton rouvre le choix de la TV.
             pendingCastMovie = movie;
             pendingAudioIdx  = audioIdx;
             pendingSubTrack  = subTrack;
@@ -374,24 +465,18 @@ function prepareAudioThenCast(movie, audioIdx, subTrack) {
   poll();
 }
 
+// ─── LANCEMENT TV DIRECTE (MPV) ───────────────────────────────────────────
 function launchLocal() {
   if (!castMoviePending) return;
 
-  var movie = castMoviePending;
-
-  // index réel de la piste audio choisie (0-based)
-  var audioTrack = (castTracks && castTracks.audio_tracks[castSelectedAudio]) || null;
-  var audioIdx   = audioTrack ? audioTrack.index : 0;
-
-  // index réel du sous-titre choisi (0-based interne ou >=1000 externe), ou null
-  var subTrack = (castSelectedSub !== null && castTracks)
-    ? castTracks.subtitle_tracks[castSelectedSub]
-    : null;
-  var subIdx = subTrack ? subTrack.index : null;
+  var play     = _playItem();
+  var audioIdx = _chosenAudioIdx();
+  var subTrack = _chosenSubTrack();
+  var subIdx   = subTrack ? subTrack.index : null;
 
   closeCastOptions();
 
-  var url = '/play/' + movie.id + '?audio=' + audioIdx;
+  var url = '/play/' + play.id + '?audio=' + audioIdx;
   if (subIdx !== null) url += '&sub=' + subIdx;
 
   fetch(url, { method: 'POST' })
@@ -438,69 +523,114 @@ function attachSubtitleTracks(video, subtitleTracks) {
   }, 100);
 }
 
-function playLocal(movie) {
+// Active le sous-titre choisi dans la modale (sinon le menu natif reste dispo).
+function activateSubtitle(video, subtitleTracks, subTrack) {
+  if (!subTrack) return;
+  var idx = subtitleTracks.indexOf(subTrack);
+  if (idx < 0) return;
+  setTimeout(function () {
+    for (var i = 0; i < video.textTracks.length; i++) {
+      video.textTracks[i].mode = (i === idx) ? 'showing' : 'disabled';
+    }
+  }, 160);   // après le 'disabled' global d'attachSubtitleTracks (100 ms)
+}
+
+// Lecture navigateur. `movie.id` est l'id de la variante de qualité choisie.
+// audioIdx 0 = piste par défaut (fichier brut, instantané) ; sinon remux cache.
+// subTrack = sous-titre à activer au démarrage (ou null).
+function playPc(movie, audioIdx, subTrack) {
   currentMovie = movie;
   var video   = document.getElementById('player-video');
   var modal   = document.getElementById('player-modal');
   var loading = document.getElementById('playerLoading');
+  var movieId = movie.id;
 
   document.getElementById('player-title').textContent = movie.title;
   loading.classList.remove('hidden');
-  setLoadingState('Préparation du film…', 'Chargement de la vidéo et extraction des pistes', false, false);
-
+  setLoadingState('Préparation du film…', 'Chargement de la vidéo et des pistes', false, false);
   video.querySelectorAll('track').forEach(function (t) { t.remove(); });
-
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  var movieId     = movie.id;
-  var videoReady  = false;
-  var tracksReady = false;
+  function start(streamUrl) {
+    var videoReady  = false;
+    var tracksReady = false;
 
-  var videoPromise = new Promise(function (resolve, reject) {
-    video.addEventListener('loadedmetadata', function () {
-      videoReady = true;
-      setLoadingState(
-        tracksReady ? 'Prêt' : 'Préparation des sous-titres…',
-        tracksReady ? 'Démarrage de la lecture' : 'Extraction en cours…',
-        true, tracksReady
-      );
-      resolve();
-    }, { once: true });
-    video.addEventListener('error', function () { reject(new Error('Erreur vidéo')); }, { once: true });
-    video.src     = '/stream/' + movieId;
-    video.preload = 'auto';
-    video.load();
-  });
-
-  var tracksPromise = fetch('/api/tracks/' + movieId)
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      tracksReady = true;
-      setLoadingState(
-        videoReady ? 'Prêt' : 'Chargement de la vidéo…',
-        videoReady ? 'Démarrage de la lecture' : 'Vidéo en cours de chargement',
-        videoReady, true
-      );
-      return data;
-    })
-    .catch(function () { return { audio_tracks: [], subtitle_tracks: [] }; });
-
-  Promise.all([videoPromise, tracksPromise])
-    .then(function (results) {
-      var tracks = results[1];
-      if (!currentMovie || currentMovie.id !== movieId) return;
-      attachSubtitleTracks(video, tracks.subtitle_tracks);
-      setLoadingState('Prêt !', 'Démarrage…', true, true);
-      setTimeout(function () {
-        loading.classList.add('hidden');
-        video.play().catch(function () {});
-      }, 200);
-    })
-    .catch(function (e) {
-      console.error('Erreur chargement :', e);
-      setLoadingState('Erreur', e.message || 'Impossible de charger le film', true, true);
+    var videoPromise = new Promise(function (resolve, reject) {
+      video.addEventListener('loadedmetadata', function () {
+        videoReady = true;
+        setLoadingState(
+          tracksReady ? 'Prêt' : 'Préparation des sous-titres…',
+          tracksReady ? 'Démarrage de la lecture' : 'Extraction en cours…',
+          true, tracksReady
+        );
+        resolve();
+      }, { once: true });
+      video.addEventListener('error', function () { reject(new Error('Erreur vidéo')); }, { once: true });
+      video.src     = streamUrl;
+      video.preload = 'auto';
+      video.load();
     });
+
+    var tracksPromise = fetch('/api/tracks/' + movieId)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        tracksReady = true;
+        setLoadingState(
+          videoReady ? 'Prêt' : 'Chargement de la vidéo…',
+          videoReady ? 'Démarrage de la lecture' : 'Vidéo en cours de chargement',
+          videoReady, true
+        );
+        return data;
+      })
+      .catch(function () { return { audio_tracks: [], subtitle_tracks: [] }; });
+
+    Promise.all([videoPromise, tracksPromise])
+      .then(function (results) {
+        var tracks = results[1];
+        if (!currentMovie || currentMovie.id !== movieId) return;
+        attachSubtitleTracks(video, tracks.subtitle_tracks);
+        activateSubtitle(video, tracks.subtitle_tracks, subTrack);
+        setLoadingState('Prêt !', 'Démarrage…', true, true);
+        setTimeout(function () {
+          loading.classList.add('hidden');
+          video.play().catch(function () {});
+        }, 200);
+      })
+      .catch(function (e) {
+        console.error('Erreur chargement :', e);
+        setLoadingState('Erreur', e.message || 'Impossible de charger le film', true, true);
+      });
+  }
+
+  // Piste par défaut : fichier brut, lecture immédiate.
+  if (!audioIdx) {
+    start('/stream/' + movieId);
+    return;
+  }
+
+  // Piste audio alternative : on attend le remux (avec progression) puis on lit.
+  setLoadingState('Préparation de la piste audio…', 'Démarrage…', false, false);
+  (function poll() {
+    if (!currentMovie || currentMovie.id !== movieId) return;   // lecteur fermé/changé
+    fetch('/api/audio_status/' + movieId + '/' + audioIdx)
+      .then(function (r) { return r.json(); })
+      .then(function (state) {
+        if (!currentMovie || currentMovie.id !== movieId) return;
+        if (state.status === 'ready') {
+          start('/stream/' + movieId + '?audio=' + audioIdx);
+        } else if (state.status === 'preparing') {
+          var pct = Math.round((state.progress || 0) * 100);
+          setLoadingState('Préparation de la piste audio…', 'Remuxage ' + pct + '%', false, false);
+          setTimeout(poll, 800);
+        } else {
+          setLoadingState('Erreur', state.message || 'Échec de la préparation', true, true);
+        }
+      })
+      .catch(function () {
+        setLoadingState('Erreur', 'Connexion impossible', true, true);
+      });
+  })();
 }
 
 function closePlayer() {
@@ -508,6 +638,7 @@ function closePlayer() {
   video.pause();
   video.src = '';
   video.querySelectorAll('track').forEach(function (t) { t.remove(); });
+  currentMovie = null;   // stoppe un éventuel polling de préparation audio
   document.getElementById('player-modal').classList.remove('open');
   document.getElementById('playerLoading').classList.remove('hidden');
   document.body.style.overflow = '';
@@ -519,18 +650,19 @@ function closePlayer() {
 function playMovie(id) {
   var m = allMovies.find(function (x) { return x.id === id; });
   if (!m) return;
-  if (currentMode === 'local')   startLocal(m);
-  else if (currentMode === 'tv') startCast(m);
-  else                           playLocal(m);
+  if (currentMode === 'local')   openOptions(m, 'local');
+  else if (currentMode === 'tv') openOptions(m, 'cast');
+  else {
+    // PC : popup uniquement s'il existe plusieurs qualités (ex. 4K + HD),
+    // juste pour choisir la qualité. Sinon lecture directe (audio et
+    // sous-titres gérés par le lecteur du navigateur).
+    if (m.qualities && m.qualities.length > 1) openOptions(m, 'pc');
+    else                                       playPc(m, 0, null);
+  }
 }
 
 function openMovie(id) {
-  var m = allMovies.find(function (x) { return x.id === id; });
-  if (m) setHero(m);
-}
-
-function playHero() {
-  if (currentMovie) playMovie(currentMovie.id);
+  playMovie(id);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -595,9 +727,9 @@ function playEpisode(episodeId) {
     poster: currentSeries.poster,
   });
   closeSeriesModal();
-  if (currentMode === 'tv')         startCast(fakeMovie);
-  else if (currentMode === 'local') startLocal(fakeMovie);
-  else                              playLocal(fakeMovie);
+  if (currentMode === 'tv')         openOptions(fakeMovie, 'cast');
+  else if (currentMode === 'local') openOptions(fakeMovie, 'local');
+  else                              playPc(fakeMovie, 0, null);
 }
 
 function closeSeriesModal() {
@@ -614,9 +746,7 @@ function loadMovies() {
     .then(function (data) {
       allMovies = data;
       applyFilters();
-      if (allMovies.length > 0) {
-        setHero(allMovies[Math.floor(Math.random() * Math.min(allMovies.length, 10))]);
-      }
+      startHeroSlideshow();
     })
     .catch(function () {
       document.getElementById('loading').innerHTML =
@@ -674,11 +804,18 @@ function movieCard(m) {
     ? ('<img class="card-thumb" src="' + m.poster + '" alt="' + escHtml(m.title) + '" loading="lazy"'
        + ' onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" />')
     : '';
-  return '<div class="movie-card" onclick="' + cardClick + '" onmouseenter="previewHero(\'' + m.id + '\')">'
+  // Badge qualité : affiché si une variante 4K/2160p existe pour ce film
+  var qualityBadge = '';
+  if (!isSeries && m.qualities && m.qualities.length) {
+    var has4k = m.qualities.some(function (q) { return (q.height || 0) >= 2160; });
+    if (has4k) qualityBadge = '<div class="quality-badge">4K</div>';
+  }
+  return '<div class="movie-card" onclick="' + cardClick + '">'
     + poster
     + '<div class="card-placeholder" style="display:' + (m.poster ? 'none' : 'flex') + '">'
     + (isSeries ? '📺' : '🎬') + '<span>' + escHtml(m.title.substring(0, 30)) + '</span></div>'
     + '<div class="card-badge">' + ext + '</div>'
+    + qualityBadge
     + (isSeries ? '<div class="series-badge">SÉRIE</div>' : '')
     + '<div class="card-info">'
     + '<div class="card-title">' + escHtml(m.title) + '</div>'
@@ -689,32 +826,63 @@ function movieCard(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// HERO
+// FOND ANIMÉ (diaporama aléatoire des films)
 // ═══════════════════════════════════════════════════════════════════
-var heroTimeout;
-function previewHero(id) {
-  clearTimeout(heroTimeout);
-  heroTimeout = setTimeout(function () {
-    var m = allMovies.find(function (x) { return x.id === id; });
-    if (m) setHero(m);
-  }, 400);
+var heroSlideTimer = null;
+var heroShuffled   = [];
+var heroPos        = 0;
+var heroActiveLayer = 0;   // 0 ou 1 : couche actuellement visible
+
+function _shuffle(arr) {
+  var a = arr.slice();
+  for (var i = a.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
 }
 
-function setHero(m) {
-  currentMovie = m;
-  document.getElementById('hero-title').textContent = m.title;
-  document.getElementById('hero-meta').textContent  =
-    [m.year, m.category !== 'Films' ? m.category : '', m.size_mb + ' Mo']
-      .filter(Boolean).join(' · ');
-  document.getElementById('hero-tag').textContent = m.category;
-  var bg = m.backdrop || m.poster;
-  if (bg) {
-    var img = new Image();
-    img.onload = function () { document.getElementById('hero-bg').style.backgroundImage = 'url(' + bg + ')'; };
-    img.src = bg;
-  } else {
-    document.getElementById('hero-bg').style.backgroundImage = '';
+function startHeroSlideshow() {
+  if (heroSlideTimer) { clearInterval(heroSlideTimer); heroSlideTimer = null; }
+
+  // On ne garde que les films avec une image utilisable
+  var withImg = allMovies.filter(function (m) { return m.backdrop || m.poster; });
+  if (withImg.length === 0) return;
+
+  heroShuffled = _shuffle(withImg);
+  heroPos = 0;
+
+  nextHeroSlide();                       // première image tout de suite
+  if (heroShuffled.length > 1) {
+    heroSlideTimer = setInterval(nextHeroSlide, 8000);   // puis toutes les 8 s
   }
+}
+
+function nextHeroSlide() {
+  if (heroShuffled.length === 0) return;
+  var m  = heroShuffled[heroPos % heroShuffled.length];
+  heroPos++;
+  // Quand on a fait le tour, on re-mélange pour un nouvel ordre
+  if (heroPos % heroShuffled.length === 0) {
+    heroShuffled = _shuffle(heroShuffled);
+  }
+
+  var bg = m.backdrop || m.poster;
+  if (!bg) return;
+
+  // Précharge l'image avant de l'afficher (évite un flash blanc)
+  var img = new Image();
+  img.onload = function () {
+    var layers = document.querySelectorAll('.hero-layer');
+    var current = layers[heroActiveLayer];
+    var nextIdx = heroActiveLayer === 0 ? 1 : 0;
+    var next    = layers[nextIdx];
+    next.style.backgroundImage = 'url(' + bg + ')';
+    next.classList.add('visible');
+    current.classList.remove('visible');
+    heroActiveLayer = nextIdx;
+  };
+  img.src = bg;
 }
 
 // ═══════════════════════════════════════════════════════════════════

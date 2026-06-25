@@ -73,49 +73,39 @@ google-cast-launcher {
   width: 24px; height: 24px; cursor: pointer;
 }
 
-/* ═══ HERO ══════════════════════════════════════════════════════════ */
+/* ═══ FOND ANIMÉ (diaporama) ════════════════════════════════════════ */
+/* Le fond reste fixe en haut de l'écran ; le catalogue glisse par-dessus
+   en commençant à mi-hauteur (voir #catalogue margin-top). */
 #hero {
-  height: 100vh; display: flex; align-items: flex-end;
-  padding: 0 3rem 5rem; position: relative; overflow: hidden;
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 65vh; overflow: hidden; z-index: 0;
 }
-#hero-bg {
+.hero-layer {
   position: absolute; inset: 0;
-  background-size: cover; background-position: center 20%;
-  filter: blur(2px) brightness(0.35);
-  transform: scale(1.04); transition: background-image 0.6s ease;
+  background-size: cover; background-position: center 25%;
+  filter: blur(2px) brightness(0.4);
+  transform: scale(1.04);
+  opacity: 0; transition: opacity 1.6s ease-in-out;
 }
+.hero-layer.visible { opacity: 1; }
 #hero-grad {
   position: absolute; inset: 0;
-  background: linear-gradient(to right, rgba(8,10,14,0.98) 0%, rgba(8,10,14,0.6) 50%, transparent 100%),
-              linear-gradient(to top, rgba(8,10,14,1) 0%, transparent 40%);
+  /* Assombrit légèrement et fond le bas vers la couleur de fond, pour que
+     le catalogue qui arrive par-dessus se raccorde sans coupure nette. */
+  background: linear-gradient(to top,
+    var(--bg) 0%, rgba(8,10,14,0.55) 38%, rgba(8,10,14,0.25) 70%, rgba(8,10,14,0.45) 100%);
 }
-#hero-content { position: relative; max-width: 540px; }
-#hero-tag {
-  font-family: 'DM Mono', monospace; font-size: 0.7rem;
-  letter-spacing: 0.15em; color: var(--gold); text-transform: uppercase; margin-bottom: 0.75rem;
-}
-#hero-title {
-  font-family: 'Bebas Neue', sans-serif;
-  font-size: clamp(3rem, 6vw, 5.5rem); line-height: 0.95;
-  letter-spacing: 0.04em; color: #fff;
-  text-shadow: 0 2px 40px rgba(0,0,0,0.8); margin-bottom: 1rem;
-}
-#hero-meta {
-  font-family: 'DM Mono', monospace; font-size: 0.72rem;
-  color: var(--muted); letter-spacing: 0.08em; margin-bottom: 1.5rem;
-}
-.hero-btns { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-.btn-hero {
-  display: flex; align-items: center; gap: 0.5rem; border: none;
-  font-family: 'Bebas Neue', sans-serif; font-size: 1rem;
-  letter-spacing: 0.1em; padding: 0.7rem 1.6rem;
-  cursor: pointer; border-radius: 2px; transition: all .2s;
-}
-.btn-hero.primary { background: var(--gold); color: #080a0e; }
-.btn-hero.primary:hover { background: var(--gold2); transform: translateY(-1px); }
 
 /* ═══ CATALOGUE & CARDS ═════════════════════════════════════════════ */
-#catalogue { padding: 0 3rem 4rem; position: relative; z-index: 2; }
+#catalogue {
+  padding: 0 3rem 4rem; position: relative; z-index: 2;
+  /* Commence à ~mi-hauteur, par-dessus le fond fixe */
+  margin-top: 50vh;
+  /* Prolonge le fondu du fond vers la couleur pleine, puis fond opaque */
+  background: linear-gradient(to bottom,
+    transparent 0%, var(--bg) 120px, var(--bg) 100%);
+  min-height: 50vh;
+}
 .category-section { margin-bottom: 3rem; }
 .category-title {
   font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem;
@@ -182,6 +172,14 @@ google-cast-launcher {
   background: var(--gold); color: #080a0e;
   font-family: 'Bebas Neue', sans-serif; font-size: 0.7rem;
   letter-spacing: 0.08em; padding: 0.2rem 0.5rem; border-radius: 2px;
+}
+.quality-badge {
+  position: absolute; top: 0.5rem; left: 0.5rem;
+  background: linear-gradient(135deg, var(--gold2), var(--gold));
+  color: #080a0e; font-family: 'Bebas Neue', sans-serif;
+  font-size: 0.72rem; letter-spacing: 0.08em;
+  padding: 0.15rem 0.45rem; border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
 }
 
 /* ═══ PLAYER MODAL ══════════════════════════════════════════════════ */
@@ -406,8 +404,8 @@ google-cast-launcher {
   .search-wrap { order: 3; flex: 1 1 100%; max-width: none; }
   /* 16px : évite le zoom automatique d'iOS au focus du champ */
   .search-wrap input { font-size: 16px; padding: 0.6rem 1rem 0.6rem 2.4rem; }
-  #hero { padding: 0 1.2rem 4rem; }
-  #catalogue { padding: 0 1.2rem 3rem; }
+  #hero { height: 48vh; }
+  #catalogue { padding: 0 1.2rem 3rem; margin-top: 38vh; }
   :root { --card-w: 140px; }
 }
 
