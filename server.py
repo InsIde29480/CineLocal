@@ -32,7 +32,7 @@ SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
 PORT             = 8765
 
-TMDB_API_KEY     = "ADD_TMBD_API_KEY_HERE"
+TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
 
 VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
@@ -105,6 +105,30 @@ def extract_year(filename: str) -> str | None:
     return match.group(1) if match else None
 
 
+# Qualité déduite du nom de fichier (du plus haut au plus bas).
+# Chaque entrée : (motif regex, libellé affiché, hauteur indicative pour le tri).
+_QUALITY_PATTERNS = [
+    (r'\b(4K|2160p?|UHD)\b',      "4K",    2160),
+    (r'\b1440p\b',                "1440p", 1440),
+    (r'\b1080p?\b',               "1080p", 1080),
+    (r'\b720p?\b',                "720p",   720),
+    (r'\b480p?\b',                "480p",   480),
+]
+
+
+def detect_quality(filename: str) -> tuple:
+    """
+    Renvoie (label, hauteur) déduits du nom de fichier.
+    Si aucun marqueur n'est trouvé, on suppose une version "HD" standard
+    (c.-à-d. le fichier non tagué d'un couple HD/4K).
+    """
+    stem = Path(filename).stem
+    for pattern, label, height in _QUALITY_PATTERNS:
+        if re.search(pattern, stem, flags=re.IGNORECASE):
+            return (label, height)
+    return ("HD", 1080)
+
+
 def parse_episode(filename: str) -> dict | None:
     match = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', filename)
     if not match:
@@ -141,14 +165,20 @@ def probe_codecs(filepath: str) -> dict:
             capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
-        vcodec = next((s["codec_name"] for s in data.get("streams", [])
-                       if s.get("codec_type") == "video"), None)
+        vstream = next((s for s in data.get("streams", [])
+                        if s.get("codec_type") == "video"), {})
+        vcodec = vstream.get("codec_name")
+        vpix   = vstream.get("pix_fmt", "") or ""
         acodec = next((s["codec_name"] for s in data.get("streams", [])
                        if s.get("codec_type") == "audio"), None)
-        codecs = {"video": vcodec, "audio": acodec}
+        # 10/12-bit (ex. yuv420p10le) : le Chromecast ne sait pas le décoder
+        # et produit des artefacts colorés (teintes mauves).
+        high_bit = bool(re.search(r'(10|12|16)(le|be)', vpix))
+        codecs = {"video": vcodec, "audio": acodec,
+                  "pix_fmt": vpix, "high_bit": high_bit}
     except Exception as e:
         print(f"ffprobe échec : {e}")
-        codecs = {"video": None, "audio": None}
+        codecs = {"video": None, "audio": None, "pix_fmt": "", "high_bit": False}
     _codec_cache[key] = codecs
     return codecs
 
@@ -440,9 +470,12 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
 def scan_movies() -> list:
     items = []
     series_groups = {}
+    movie_groups = {}
+    playable = {}        # id de fichier -> dict jouable (path, title, ext...)
 
     if not MOVIES_DIR.exists():
         print(f"Dossier introuvable : {MOVIES_DIR}")
+        _set_playable(playable)
         return items
 
     for filepath in sorted(MOVIES_DIR.rglob("*")):
@@ -482,6 +515,7 @@ def scan_movies() -> list:
                 "episode": ep["episode"],
                 "title":   f"S{ep['season']:02d}E{ep['episode']:02d}",
             }
+            playable[movie_id] = episode_data
             if group_key not in series_groups:
                 series_groups[group_key] = {
                     "stitle": stitle, "category": category,
@@ -489,13 +523,54 @@ def scan_movies() -> list:
                 }
             series_groups[group_key]["episodes"].append(episode_data)
         else:
-            items.append({
+            title = clean_title(filepath.name)
+            year  = extract_year(filepath.name)
+            qlabel, qheight = detect_quality(filepath.name)
+            # Les fichiers d'un même film (même titre + année) sont regroupés
+            # comme variantes de qualité. clean_title retire déjà 4K/1080p/etc.
+            group_key = f"{title}|{year or ''}"
+            variant = {
                 **common,
-                "title":    clean_title(filepath.name),
-                "year":     extract_year(filepath.name),
-                "kind":     "movie",
-                "poster":   None, "backdrop": None, "overview": "",
-            })
+                "title":          title,
+                "quality":        qlabel,
+                "quality_height": qheight,
+            }
+            playable[movie_id] = variant
+            if group_key not in movie_groups:
+                movie_groups[group_key] = {
+                    "title": title, "year": year,
+                    "category": category, "variants": [],
+                }
+            movie_groups[group_key]["variants"].append(variant)
+
+    for group_key, group in movie_groups.items():
+        # Meilleure qualité en premier ; à hauteur égale, le plus gros fichier.
+        variants = sorted(
+            group["variants"],
+            key=lambda v: (v["quality_height"], v["size_mb"]),
+            reverse=True,
+        )
+        primary = variants[0]
+        items.append({
+            "id":        primary["id"],          # id jouable par défaut (meilleure qualité)
+            "title":     group["title"],
+            "year":      group["year"],
+            "category":  group["category"],
+            "size_mb":   primary["size_mb"],
+            "ext":       primary["ext"],
+            "kind":      "movie",
+            "qualities": [
+                {
+                    "id":      v["id"],
+                    "label":   v["quality"],
+                    "height":  v["quality_height"],
+                    "size_mb": v["size_mb"],
+                    "ext":     v["ext"],
+                }
+                for v in variants
+            ],
+            "poster":    None, "backdrop": None, "overview": "",
+        })
 
     for group_key, group in series_groups.items():
         series_id = "s_" + str(hash(group_key) & 0xFFFFFFFF)
@@ -534,12 +609,19 @@ def scan_movies() -> list:
             it["backdrop"] = tmdb["backdrop"]
             it["overview"] = tmdb["overview"]
 
+    _set_playable(playable)
     _save_tmdb_cache()
     return items
 
 
 _movies_cache = None
 _movies_lock = threading.Lock()
+_playable_index = {}        # id de fichier -> dict jouable (rempli par scan_movies)
+
+
+def _set_playable(mapping: dict):
+    global _playable_index
+    _playable_index = mapping
 
 
 def get_movies() -> list:
@@ -553,14 +635,11 @@ def get_movies() -> list:
 
 
 def get_movie_by_id(movie_id: str) -> dict | None:
-    for item in get_movies():
-        if item["id"] == movie_id:
-            return item
-        if item.get("kind") == "series":
-            for ep in item.get("episodes", []):
-                if ep["id"] == movie_id:
-                    return ep
-    return None
+    # Garantit que le scan a eu lieu (remplit aussi _playable_index).
+    get_movies()
+    # Toutes les variantes de qualité et tous les épisodes sont indexés à plat
+    # par leur id de fichier — c'est ce que la lecture/cast/pistes utilisent.
+    return _playable_index.get(movie_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -861,7 +940,9 @@ def cast_video(movie_id):
     codecs = probe_codecs(filepath)
     audio_idx = request.args.get("audio", default=None, type=int)
 
-    video_ok = codecs["video"] in VIDEO_OK
+    # Vidéo compatible Chromecast = H.264 ET 8-bit. Un H.264/HEVC 10-bit
+    # serait décodé de travers par le Chromecast (artefacts mauves) → transcodage.
+    video_ok = (codecs["video"] in VIDEO_OK) and not codecs.get("high_bit")
 
     # Piste audio alternative + vidéo h264 → utilise le remux cache (seekable)
     if audio_idx is not None and video_ok:
@@ -871,9 +952,11 @@ def cast_video(movie_id):
         print(f"Cast piste audio {audio_idx} (remux cache) : {movie['filename']}")
         return _stream_file_ranged(str(out_path), "video/mp4")
 
-    # Argument vidéo
+    # Argument vidéo. En transcodage on force yuv420p (8-bit) + profil/niveau
+    # standard, sinon libx264 garderait le 10-bit de la source.
     v_arg = ["-map", "0:v:0", "-c:v", "copy"] if video_ok else [
-        "-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"
+        "-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"
     ]
 
     # Argument audio : piste spécifique ou piste par défaut
