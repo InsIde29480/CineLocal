@@ -70,11 +70,6 @@ cd cinelocal
 En particulier, renseigne **ta propre clé TMDB** (gratuite sur
 <https://www.themoviedb.org/settings/api>) dans la variable `TMDB_API_KEY`.
 
-```bash
-pip install flask waitress --break-system-packages
-sudo systemctl restart cinelocal.service
-```
-
 ### 3. Lancer
 
 ```bash
