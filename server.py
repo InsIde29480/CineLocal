@@ -11,6 +11,7 @@ import subprocess
 import threading
 import shutil
 import time
+from collections import deque
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from waitress import serve
@@ -40,10 +41,13 @@ BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
 SUBS_LANG_OK     = {"fre", "fra", "fr", "francais", "français", "eng", "en", "english", "und", "vo"}
 
-# Timeouts ffmpeg pour l'extraction des sous-titres.
-# Généreux pour rester fiable sur disque dur (lecture/seek plus lents qu'un SSD).
-SUBS_TIMEOUT_EMBEDDED = 300   # 5 min : extraction d'un flux sous-titre dans un MKV
-SUBS_TIMEOUT_EXTERNAL = 180   # 3 min : conversion .srt -> .vtt
+# Surveillance ffmpeg pour l'extraction des sous-titres.
+# Au lieu d'un timeout fixe (qui tue ffmpeg même s'il progresse sur HDD lent),
+# on observe son flux stderr : tant qu'il parle, il avance. On tue seulement
+# après un silence prolongé (= vraiment bloqué) ou si le plafond absolu est
+# atteint (filet de sécurité contre les boucles infinies).
+SUBS_IDLE_TIMEOUT = 90      # 1 min 30 sans aucune sortie ffmpeg = bloqué
+SUBS_HARD_MAX     = 1800    # 30 min absolu (sécurité, ne devrait jamais arriver)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -215,28 +219,100 @@ def _safe_remove(path: Path):
         pass
 
 
-def _run_ffmpeg_subs(cmd: list, vtt_path: Path, timeout: int, label: str) -> bool:
+def _run_ffmpeg_subs(cmd: list, vtt_path: Path, label: str,
+                     idle_timeout: int = SUBS_IDLE_TIMEOUT,
+                     hard_max: int = SUBS_HARD_MAX) -> bool:
     """
-    Lance ffmpeg pour produire un VTT. Renvoie True seulement si le fichier est
-    réellement utilisable. En cas d'échec/timeout, supprime le fichier partiel.
+    Lance ffmpeg en surveillant son activité plutôt qu'avec un timeout fixe.
+
+    Un thread lit stderr en continu ; à chaque ligne reçue on met à jour
+    `last_activity`. Tant que ffmpeg écrit (statut, banner, progression...),
+    on considère qu'il avance — même très lentement sur HDD. On ne le tue
+    que si :
+      - aucune sortie depuis `idle_timeout` secondes (= bloqué pour de bon),
+      - ou `hard_max` secondes au total (filet de sécurité).
+
+    Renvoie True seulement si le VTT produit est utilisable.
     """
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _safe_remove(vtt_path)
-        print(f"Timeout ({timeout}s) extraction {label} - HDD trop lent ou fichier abîmé ?")
-        return False
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+        )
     except Exception as e:
         _safe_remove(vtt_path)
-        print(f"Échec {label} : {e}")
+        print(f"Échec lancement ffmpeg {label} : {e}")
         return False
 
-    if result.returncode != 0 or not vtt_path.exists() or vtt_path.stat().st_size == 0:
+    stderr_tail = deque(maxlen=20)
+    last_activity = time.monotonic()
+    activity_lock = threading.Lock()
+
+    def reader():
+        nonlocal last_activity
+        try:
+            for raw in iter(proc.stderr.readline, b""):
+                with activity_lock:
+                    last_activity = time.monotonic()
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    stderr_tail.append(line)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+
+    start = time.monotonic()
+    killed_reason = None
+
+    while True:
+        if proc.poll() is not None:
+            break
+        now = time.monotonic()
+        with activity_lock:
+            silent_for = now - last_activity
+        if silent_for > idle_timeout:
+            killed_reason = f"aucune progression depuis {int(silent_for)}s"
+            break
+        if now - start > hard_max:
+            killed_reason = f"plafond absolu {hard_max}s atteint"
+            break
+        time.sleep(1)
+
+    if killed_reason:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+    t.join(timeout=2)
+
+    if killed_reason:
         _safe_remove(vtt_path)
-        err = (result.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()
-        tail = err[-3:] if err else []
-        print(f"ffmpeg échec {label} (rc={result.returncode}): {' | '.join(tail)}")
+        print(f"ffmpeg interrompu {label} : {killed_reason}")
         return False
+
+    if proc.returncode != 0 or not vtt_path.exists() or vtt_path.stat().st_size == 0:
+        _safe_remove(vtt_path)
+        tail = list(stderr_tail)[-3:]
+        print(f"ffmpeg échec {label} (rc={proc.returncode}): {' | '.join(tail)}")
+        return False
+
+    elapsed = int(time.monotonic() - start)
+    if elapsed >= 5:
+        print(f"  {label} extrait en {elapsed}s")
     return True
 
 
@@ -343,7 +419,6 @@ def extract_tracks(movie: dict) -> dict:
                             str(vtt_path),
                         ],
                         vtt_path,
-                        SUBS_TIMEOUT_EMBEDDED,
                         f"sous-titres {subs_idx} ({lang})",
                     )
                     if ok:
@@ -382,7 +457,6 @@ def extract_tracks(movie: dict) -> dict:
                             ["ffmpeg", "-y", "-i", str(sub_file),
                              "-c:s", "webvtt", str(vtt_path)],
                             vtt_path,
-                            SUBS_TIMEOUT_EXTERNAL,
                             f"sous-titres externes {sub_file.name}",
                         )
                 except Exception as e:
@@ -414,7 +488,6 @@ def extract_tracks(movie: dict) -> dict:
                             ["ffmpeg", "-y", "-i", str(simple_sub),
                              "-c:s", "webvtt", str(vtt_path)],
                             vtt_path,
-                            SUBS_TIMEOUT_EXTERNAL,
                             f"sous-titres externes {simple_sub.name}",
                         )
                 except Exception as e:
