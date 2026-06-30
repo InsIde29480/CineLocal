@@ -380,7 +380,7 @@ def extract_tracks(movie: dict) -> dict:
             data = json.loads(result.stdout)
         except Exception as e:
             print(f"ffprobe échec : {e}")
-            return {"audio_tracks": [], "subtitle_tracks": []}
+            return {"audio_tracks": [], "subtitle_tracks": [], "extraction_complete": False}
 
         streams = data.get("streams", [])
         audio_tracks = []
@@ -522,6 +522,99 @@ def clear_tracks_cache(movie_id: str):
     cache_dir = TRACKS_CACHE_DIR / movie_id
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PRÉ-EXTRACTION EN ARRIÈRE-PLAN
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _BackgroundExtractor:
+    """
+    Précharge les pistes/sous-titres de tous les films dans une file traitée
+    par un seul worker (mono-thread = pas de thrash disque sur HDD). Les films
+    déjà en cache complet sont reconnus instantanément par extract_tracks().
+    L'extraction à la demande reste prioritaire : si l'utilisateur clique sur
+    un film pas encore traité, sa requête s'exécute en parallèle (le verrou
+    par film évite la double extraction si c'est le même).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._queue = deque()
+        self._seen = set()
+        self._counts = {"total": 0, "done": 0, "failed": 0, "pending": 0}
+        self._current = None
+        self._started_at = None
+        self._worker = None
+
+    def enqueue(self, movies: list):
+        added = 0
+        with self._lock:
+            for m in movies:
+                mid = m.get("id")
+                if not mid or mid in self._seen:
+                    continue
+                self._seen.add(mid)
+                self._queue.append(m)
+                added += 1
+            self._counts["total"] = len(self._seen)
+            self._counts["pending"] = len(self._queue)
+            if added and self._started_at is None:
+                self._started_at = time.time()
+            self._ensure_worker_locked()
+        if added:
+            print(f"Pré-extraction : {added} film(s) ajoutés à la file (total {len(self._seen)})")
+
+    def _ensure_worker_locked(self):
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(
+                target=self._run, daemon=True, name="subs-bg"
+            )
+            self._worker.start()
+
+    def _run(self):
+        while True:
+            with self._lock:
+                if not self._queue:
+                    if self._current is not None:
+                        print("Pré-extraction : file vide, terminé.")
+                    self._current = None
+                    return
+                movie = self._queue.popleft()
+                self._counts["pending"] = len(self._queue)
+                self._current = movie.get("filename")
+            try:
+                meta = extract_tracks(movie)
+                ok = meta.get("extraction_complete", False)
+                with self._lock:
+                    if ok:
+                        self._counts["done"] += 1
+                    else:
+                        self._counts["failed"] += 1
+            except Exception as e:
+                print(f"Pré-extraction erreur sur {movie.get('filename')} : {e}")
+                with self._lock:
+                    self._counts["failed"] += 1
+
+    def status(self) -> dict:
+        with self._lock:
+            done = self._counts["done"]
+            failed = self._counts["failed"]
+            total = self._counts["total"]
+            processed = done + failed
+            return {
+                "total":       total,
+                "done":        done,
+                "failed":      failed,
+                "pending":     self._counts["pending"],
+                "in_progress": self._current is not None,
+                "current":     self._current,
+                "progress":    (processed / total) if total else 1.0,
+                "elapsed_s":   int(time.time() - self._started_at) if self._started_at else 0,
+            }
+
+
+_bg_extractor = _BackgroundExtractor()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1009,7 +1102,9 @@ def api_refresh():
     global _movies_cache
     with _movies_lock:
         _movies_cache = None
-    return jsonify({"status": "ok", "count": len(get_movies())})
+    movies = get_movies()
+    _bg_extractor.enqueue(movies)
+    return jsonify({"status": "ok", "count": len(movies)})
 
 
 @app.route("/api/tracks/<movie_id>")
@@ -1027,6 +1122,11 @@ def api_tracks_refresh(movie_id):
     if not movie:
         return jsonify({"error": "Film introuvable"}), 404
     return jsonify(extract_tracks(movie))
+
+
+@app.route("/api/extraction/status")
+def api_extraction_status():
+    return jsonify(_bg_extractor.status())
 
 
 @app.route("/api/audio_status/<movie_id>/<int:idx>")
@@ -1204,5 +1304,6 @@ if __name__ == "__main__":
     print(f"Pour TV/Cast  : http://<ton-ip>:{PORT}")
     print("━" * 60)
 
-    get_movies()
+    movies = get_movies()
+    _bg_extractor.enqueue(movies)
     serve(app, host=HOST, port=PORT, threads=8)
