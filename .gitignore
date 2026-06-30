@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+.tracks_cache/
+.tmdb_cache.json
