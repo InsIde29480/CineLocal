@@ -32,6 +32,9 @@
         <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button>
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
+      <button class="btn-refresh btn-extraction" id="btnExtraction" onclick="openExtractionModal()" title="État de l'extraction des sous-titres">
+        CC<span class="extraction-dot" id="extractionDot"></span>
+      </button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
       <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹<span class="btn-label"> Stop TV</span></button>
     </div>
@@ -122,6 +125,50 @@
   <div class="cast-status-bar" id="castStatus">
     <div class="cast-dot"></div>
     <span id="castStatusText">Diffusion en cours sur la TV</span>
+  </div>
+
+  <!-- EXTRACTION STATUS MODAL -->
+  <div id="extraction-modal">
+    <div class="extraction-container">
+      <div class="extraction-header">
+        <div>
+          <div class="extraction-title">Extraction des sous-titres</div>
+          <div class="extraction-state" id="extractionState">Chargement…</div>
+        </div>
+        <button class="icon-btn" onclick="closeExtractionModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="extraction-body">
+        <div class="extraction-progress-wrap">
+          <div class="extraction-progress-bar"><div class="extraction-progress-fill" id="extractionFill"></div></div>
+          <div class="extraction-progress-text" id="extractionProgressText">—</div>
+        </div>
+        <div class="extraction-stats">
+          <div class="extraction-stat">
+            <div class="extraction-stat-label">Terminés</div>
+            <div class="extraction-stat-value" id="extractionDone">—</div>
+          </div>
+          <div class="extraction-stat">
+            <div class="extraction-stat-label">En attente</div>
+            <div class="extraction-stat-value" id="extractionPending">—</div>
+          </div>
+          <div class="extraction-stat">
+            <div class="extraction-stat-label">Échecs</div>
+            <div class="extraction-stat-value" id="extractionFailed">—</div>
+          </div>
+          <div class="extraction-stat">
+            <div class="extraction-stat-label">Total</div>
+            <div class="extraction-stat-value" id="extractionTotal">—</div>
+          </div>
+        </div>
+        <div class="extraction-current-label">Film en cours</div>
+        <div class="extraction-current" id="extractionCurrent">—</div>
+        <div class="extraction-elapsed" id="extractionElapsed"></div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

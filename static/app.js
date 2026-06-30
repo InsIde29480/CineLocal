@@ -895,6 +895,90 @@ function escHtml(s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// PRÉ-EXTRACTION DES SOUS-TITRES (modal de suivi)
+// ═══════════════════════════════════════════════════════════════════
+var extractionPollTimer = null;
+var extractionBackgroundTimer = null;
+
+function fmtElapsed(s) {
+  if (!s || s < 0) return '0s';
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return m + 'm ' + r + 's';
+  var h = Math.floor(m / 60); m = m % 60;
+  return h + 'h ' + m + 'm';
+}
+
+function applyExtractionStatus(st, modalOpen) {
+  var btn = document.getElementById('btnExtraction');
+  if (btn) {
+    btn.classList.toggle('active', !!st.in_progress);
+    btn.classList.toggle('has-failures', !st.in_progress && (st.failed || 0) > 0);
+  }
+  if (!modalOpen) return;
+
+  var pct = Math.round((st.progress || 0) * 100);
+  document.getElementById('extractionFill').style.width = pct + '%';
+  document.getElementById('extractionProgressText').textContent = pct + ' %';
+  document.getElementById('extractionDone').textContent     = st.done || 0;
+  document.getElementById('extractionPending').textContent  = st.pending || 0;
+  document.getElementById('extractionFailed').textContent   = st.failed || 0;
+  document.getElementById('extractionTotal').textContent    = st.total || 0;
+  document.getElementById('extractionCurrent').textContent  = st.current || '—';
+  document.getElementById('extractionElapsed').textContent  =
+    st.elapsed_s ? ('Temps écoulé : ' + fmtElapsed(st.elapsed_s)) : '';
+
+  var stateEl = document.getElementById('extractionState');
+  stateEl.classList.remove('active', 'done', 'error');
+  if (st.in_progress) {
+    stateEl.textContent = 'En cours';
+    stateEl.classList.add('active');
+  } else if (st.total === 0) {
+    stateEl.textContent = 'Aucun film à traiter';
+  } else if ((st.failed || 0) > 0) {
+    stateEl.textContent = 'Terminé avec ' + st.failed + ' échec(s)';
+    stateEl.classList.add('error');
+  } else {
+    stateEl.textContent = 'Terminé';
+    stateEl.classList.add('done');
+  }
+}
+
+function pollExtractionStatus(modalOpen) {
+  return fetch('/api/extraction/status')
+    .then(function (r) { return r.json(); })
+    .then(function (st) { applyExtractionStatus(st, modalOpen); return st; })
+    .catch(function () { /* serveur inaccessible : on ignore */ });
+}
+
+function openExtractionModal() {
+  document.getElementById('extraction-modal').classList.add('open');
+  pollExtractionStatus(true);
+  if (extractionPollTimer) clearInterval(extractionPollTimer);
+  extractionPollTimer = setInterval(function () { pollExtractionStatus(true); }, 2000);
+}
+
+function closeExtractionModal() {
+  document.getElementById('extraction-modal').classList.remove('open');
+  if (extractionPollTimer) { clearInterval(extractionPollTimer); extractionPollTimer = null; }
+}
+
+function startBackgroundExtractionPoll() {
+  // Rafraîchit juste l'indicateur du bouton tant qu'il y a du travail en cours.
+  pollExtractionStatus(false).then(function (st) {
+    if (extractionBackgroundTimer) clearInterval(extractionBackgroundTimer);
+    extractionBackgroundTimer = setInterval(function () {
+      pollExtractionStatus(false).then(function (s) {
+        if (s && !s.in_progress && (!s.failed || s.failed === 0)) {
+          clearInterval(extractionBackgroundTimer);
+          extractionBackgroundTimer = null;
+        }
+      });
+    }, 5000);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ÉVÉNEMENTS & INIT
 // ═══════════════════════════════════════════════════════════════════
 document.getElementById('search').addEventListener('input', applyFilters);
@@ -908,9 +992,13 @@ document.getElementById('series-modal').addEventListener('click', function (e) {
 document.getElementById('cast-options-modal').addEventListener('click', function (e) {
   if (e.target === document.getElementById('cast-options-modal')) closeCastOptions();
 });
+document.getElementById('extraction-modal').addEventListener('click', function (e) {
+  if (e.target === document.getElementById('extraction-modal')) closeExtractionModal();
+});
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); }
+  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); closeExtractionModal(); }
 });
 
 setMode(currentMode);
 loadMovies();
+startBackgroundExtractionPoll();
