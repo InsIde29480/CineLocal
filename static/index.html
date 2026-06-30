@@ -167,6 +167,11 @@
         <div class="extraction-current-label">Film en cours</div>
         <div class="extraction-current" id="extractionCurrent">—</div>
         <div class="extraction-elapsed" id="extractionElapsed"></div>
+        <button class="extraction-failures-btn" id="extractionFailuresBtn"
+                onclick="toggleExtractionFailures()" style="display:none">
+          Voir les détails des échecs
+        </button>
+        <div class="extraction-failures-list" id="extractionFailuresList"></div>
       </div>
     </div>
   </div>

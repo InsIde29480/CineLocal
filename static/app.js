@@ -942,6 +942,51 @@ function applyExtractionStatus(st, modalOpen) {
     stateEl.textContent = 'Terminé';
     stateEl.classList.add('done');
   }
+
+  var failBtn = document.getElementById('extractionFailuresBtn');
+  if (failBtn) failBtn.style.display = ((st.failed || 0) > 0) ? '' : 'none';
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function toggleExtractionFailures() {
+  var list = document.getElementById('extractionFailuresList');
+  if (list.classList.contains('open')) {
+    list.classList.remove('open');
+    return;
+  }
+  list.classList.add('open');
+  list.innerHTML = '<div class="extraction-failure-item"><div class="extraction-failure-reason">Chargement…</div></div>';
+  fetch('/api/extraction/failures')
+    .then(function (r) { return r.json(); })
+    .then(function (rows) {
+      if (!rows || !rows.length) {
+        list.innerHTML = '<div class="extraction-failure-item"><div class="extraction-failure-reason">Aucun détail disponible.</div></div>';
+        return;
+      }
+      list.innerHTML = rows.map(function (row) {
+        var name = row.filename || row.title || row.movie_id || '?';
+        var failures = (row.failures || []);
+        var details = failures.map(function (f) {
+          var tags = '';
+          if (f.source)   tags += '<span class="extraction-failure-tag">' + escapeHtml(f.source) + '</span>';
+          if (f.language) tags += '<span class="extraction-failure-tag">' + escapeHtml(f.language) + '</span>';
+          if (f.codec)    tags += '<span class="extraction-failure-tag">' + escapeHtml(f.codec) + '</span>';
+          var extra = f.file ? (escapeHtml(f.file) + ' — ') : '';
+          return '<div class="extraction-failure-reason">' + tags + extra + escapeHtml(f.reason || 'raison inconnue') + '</div>';
+        }).join('') || '<div class="extraction-failure-reason">(aucun détail)</div>';
+        return '<div class="extraction-failure-item">'
+          + '<div class="extraction-failure-title">' + escapeHtml(name) + '</div>'
+          + details + '</div>';
+      }).join('');
+    })
+    .catch(function () {
+      list.innerHTML = '<div class="extraction-failure-item"><div class="extraction-failure-reason">Erreur de chargement.</div></div>';
+    });
 }
 
 function pollExtractionStatus(modalOpen) {
@@ -961,6 +1006,8 @@ function openExtractionModal() {
 function closeExtractionModal() {
   document.getElementById('extraction-modal').classList.remove('open');
   if (extractionPollTimer) { clearInterval(extractionPollTimer); extractionPollTimer = null; }
+  var list = document.getElementById('extractionFailuresList');
+  if (list) list.classList.remove('open');
 }
 
 function startBackgroundExtractionPoll() {

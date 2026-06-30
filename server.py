@@ -24,10 +24,10 @@ from flask import Flask, jsonify, send_file, request, Response, send_from_direct
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-MOVIES_DIR       = Path.home() / "nvme_data"
+MOVIES_DIR       = Path.home() / "storage/6TO/Films"
 STATIC_DIR       = Path(__file__).parent / "static"
-TMDB_CACHE_FILE  = Path(__file__).parent / ".tmdb_cache.json"
-TRACKS_CACHE_DIR = Path(__file__).parent / ".tracks_cache"
+TMDB_CACHE_FILE  = Path.home() / "storage/6TO/.tmdb_cache.json"
+TRACKS_CACHE_DIR = Path.home() / "storage/6TO/.tracks_cache"
 
 SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
@@ -221,18 +221,13 @@ def _safe_remove(path: Path):
 
 def _run_ffmpeg_subs(cmd: list, vtt_path: Path, label: str,
                      idle_timeout: int = SUBS_IDLE_TIMEOUT,
-                     hard_max: int = SUBS_HARD_MAX) -> bool:
+                     hard_max: int = SUBS_HARD_MAX):
     """
     Lance ffmpeg en surveillant son activité plutôt qu'avec un timeout fixe.
 
-    Un thread lit stderr en continu ; à chaque ligne reçue on met à jour
-    `last_activity`. Tant que ffmpeg écrit (statut, banner, progression...),
-    on considère qu'il avance — même très lentement sur HDD. On ne le tue
-    que si :
-      - aucune sortie depuis `idle_timeout` secondes (= bloqué pour de bon),
-      - ou `hard_max` secondes au total (filet de sécurité).
-
-    Renvoie True seulement si le VTT produit est utilisable.
+    Renvoie un tuple (ok: bool, reason: str). En cas de succès, reason="".
+    En cas d'échec, reason contient un résumé (sortie ffmpeg ou cause du kill)
+    utile pour diagnostiquer.
     """
     try:
         proc = subprocess.Popen(
@@ -243,8 +238,9 @@ def _run_ffmpeg_subs(cmd: list, vtt_path: Path, label: str,
         )
     except Exception as e:
         _safe_remove(vtt_path)
-        print(f"Échec lancement ffmpeg {label} : {e}")
-        return False
+        msg = f"lancement ffmpeg impossible : {e}"
+        print(f"Échec {label} : {msg}")
+        return False, msg
 
     stderr_tail = deque(maxlen=20)
     last_activity = time.monotonic()
@@ -275,7 +271,7 @@ def _run_ffmpeg_subs(cmd: list, vtt_path: Path, label: str,
         with activity_lock:
             silent_for = now - last_activity
         if silent_for > idle_timeout:
-            killed_reason = f"aucune progression depuis {int(silent_for)}s"
+            killed_reason = f"aucune progression ffmpeg depuis {int(silent_for)}s"
             break
         if now - start > hard_max:
             killed_reason = f"plafond absolu {hard_max}s atteint"
@@ -302,18 +298,20 @@ def _run_ffmpeg_subs(cmd: list, vtt_path: Path, label: str,
     if killed_reason:
         _safe_remove(vtt_path)
         print(f"ffmpeg interrompu {label} : {killed_reason}")
-        return False
+        return False, killed_reason
 
     if proc.returncode != 0 or not vtt_path.exists() or vtt_path.stat().st_size == 0:
         _safe_remove(vtt_path)
         tail = list(stderr_tail)[-3:]
-        print(f"ffmpeg échec {label} (rc={proc.returncode}): {' | '.join(tail)}")
-        return False
+        joined = " | ".join(tail) if tail else "(stderr vide)"
+        reason = f"rc={proc.returncode} - {joined}"
+        print(f"ffmpeg échec {label} : {reason}")
+        return False, reason
 
     elapsed = int(time.monotonic() - start)
     if elapsed >= 5:
         print(f"  {label} extrait en {elapsed}s")
-    return True
+    return True, ""
 
 
 def extract_tracks(movie: dict) -> dict:
@@ -385,6 +383,7 @@ def extract_tracks(movie: dict) -> dict:
         streams = data.get("streams", [])
         audio_tracks = []
         subtitle_tracks = []
+        subtitle_failures = []
         audio_idx = 0
         subs_idx = 0
         extraction_complete = True
@@ -411,7 +410,7 @@ def extract_tracks(movie: dict) -> dict:
                     print(f"Sous-titres {lang} ignorés (langue non voulue)")
                 elif codec in SUBS_TEXT_CODECS:
                     vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
-                    ok = _run_ffmpeg_subs(
+                    ok, reason = _run_ffmpeg_subs(
                         [
                             "ffmpeg", "-y", "-i", str(filepath),
                             "-map", f"0:s:{subs_idx}",
@@ -431,6 +430,13 @@ def extract_tracks(movie: dict) -> dict:
                         print(f"Sous-titres {lang} : {title or codec}")
                     else:
                         extraction_complete = False
+                        subtitle_failures.append({
+                            "index":    subs_idx,
+                            "language": lang,
+                            "codec":    codec,
+                            "source":   "embedded",
+                            "reason":   reason,
+                        })
                 else:
                     print(f"Sous-titres image ({codec}) ignorés")
                 subs_idx += 1
@@ -448,12 +454,15 @@ def extract_tracks(movie: dict) -> dict:
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 ok = False
+                reason = ""
                 try:
                     if ext == '.vtt':
                         shutil.copy(sub_file, vtt_path)
                         ok = vtt_path.exists() and vtt_path.stat().st_size > 0
+                        if not ok:
+                            reason = "copie .vtt vide"
                     else:
-                        ok = _run_ffmpeg_subs(
+                        ok, reason = _run_ffmpeg_subs(
                             ["ffmpeg", "-y", "-i", str(sub_file),
                              "-c:s", "webvtt", str(vtt_path)],
                             vtt_path,
@@ -461,6 +470,7 @@ def extract_tracks(movie: dict) -> dict:
                         )
                 except Exception as e:
                     _safe_remove(vtt_path)
+                    reason = f"exception : {e}"
                     print(f"Échec sous-titres externes {sub_file.name} : {e}")
                 if ok:
                     subtitle_tracks.append({
@@ -473,18 +483,29 @@ def extract_tracks(movie: dict) -> dict:
                     subs_idx += 1
                 else:
                     extraction_complete = False
+                    subtitle_failures.append({
+                        "index":    external_idx,
+                        "language": lang,
+                        "codec":    ext.lstrip("."),
+                        "source":   "external",
+                        "file":     sub_file.name,
+                        "reason":   reason or "raison inconnue",
+                    })
 
             simple_sub = movie_dir / f"{movie_stem}{ext}"
             if simple_sub.exists():
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
                 ok = False
+                reason = ""
                 try:
                     if ext == '.vtt':
                         shutil.copy(simple_sub, vtt_path)
                         ok = vtt_path.exists() and vtt_path.stat().st_size > 0
+                        if not ok:
+                            reason = "copie .vtt vide"
                     else:
-                        ok = _run_ffmpeg_subs(
+                        ok, reason = _run_ffmpeg_subs(
                             ["ffmpeg", "-y", "-i", str(simple_sub),
                              "-c:s", "webvtt", str(vtt_path)],
                             vtt_path,
@@ -492,6 +513,7 @@ def extract_tracks(movie: dict) -> dict:
                         )
                 except Exception as e:
                     _safe_remove(vtt_path)
+                    reason = f"exception : {e}"
                     print(f"Échec sous-titres externes {simple_sub.name} : {e}")
                 if ok:
                     subtitle_tracks.append({
@@ -504,10 +526,19 @@ def extract_tracks(movie: dict) -> dict:
                     subs_idx += 1
                 else:
                     extraction_complete = False
+                    subtitle_failures.append({
+                        "index":    external_idx,
+                        "language": "und",
+                        "codec":    ext.lstrip("."),
+                        "source":   "external",
+                        "file":     simple_sub.name,
+                        "reason":   reason or "raison inconnue",
+                    })
 
         metadata = {
             "audio_tracks":        audio_tracks,
             "subtitle_tracks":     subtitle_tracks,
+            "subtitle_failures":   subtitle_failures,
             "extraction_complete": extraction_complete,
         }
         metadata_file.write_text(
@@ -546,6 +577,7 @@ class _BackgroundExtractor:
         self._current = None
         self._started_at = None
         self._worker = None
+        self._failures = {}   # movie_id -> {"filename": ..., "failures": [...]}
 
     def enqueue(self, movies: list):
         added = 0
@@ -589,12 +621,23 @@ class _BackgroundExtractor:
                 with self._lock:
                     if ok:
                         self._counts["done"] += 1
+                        self._failures.pop(movie["id"], None)
                     else:
                         self._counts["failed"] += 1
+                        self._failures[movie["id"]] = {
+                            "filename": movie.get("filename"),
+                            "title":    movie.get("title"),
+                            "failures": meta.get("subtitle_failures", []),
+                        }
             except Exception as e:
                 print(f"Pré-extraction erreur sur {movie.get('filename')} : {e}")
                 with self._lock:
                     self._counts["failed"] += 1
+                    self._failures[movie["id"]] = {
+                        "filename": movie.get("filename"),
+                        "title":    movie.get("title"),
+                        "failures": [{"reason": f"exception : {e}"}],
+                    }
 
     def status(self) -> dict:
         with self._lock:
@@ -612,6 +655,13 @@ class _BackgroundExtractor:
                 "progress":    (processed / total) if total else 1.0,
                 "elapsed_s":   int(time.time() - self._started_at) if self._started_at else 0,
             }
+
+    def failures(self) -> list:
+        with self._lock:
+            return [
+                {"movie_id": mid, **info}
+                for mid, info in self._failures.items()
+            ]
 
 
 _bg_extractor = _BackgroundExtractor()
@@ -1127,6 +1177,11 @@ def api_tracks_refresh(movie_id):
 @app.route("/api/extraction/status")
 def api_extraction_status():
     return jsonify(_bg_extractor.status())
+
+
+@app.route("/api/extraction/failures")
+def api_extraction_failures():
+    return jsonify(_bg_extractor.failures())
 
 
 @app.route("/api/audio_status/<movie_id>/<int:idx>")
