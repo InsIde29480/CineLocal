@@ -40,6 +40,11 @@ BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
 SUBS_LANG_OK     = {"fre", "fra", "fr", "francais", "français", "eng", "en", "english", "und", "vo"}
 
+# Timeouts ffmpeg pour l'extraction des sous-titres.
+# Généreux pour rester fiable sur disque dur (lecture/seek plus lents qu'un SSD).
+SUBS_TIMEOUT_EMBEDDED = 300   # 5 min : extraction d'un flux sous-titre dans un MKV
+SUBS_TIMEOUT_EXTERNAL = 180   # 3 min : conversion .srt -> .vtt
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INITIALISATION FLASK
@@ -202,6 +207,39 @@ def _lang_label(code: str) -> str:
 _extraction_locks = {}
 
 
+def _safe_remove(path: Path):
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _run_ffmpeg_subs(cmd: list, vtt_path: Path, timeout: int, label: str) -> bool:
+    """
+    Lance ffmpeg pour produire un VTT. Renvoie True seulement si le fichier est
+    réellement utilisable. En cas d'échec/timeout, supprime le fichier partiel.
+    """
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _safe_remove(vtt_path)
+        print(f"Timeout ({timeout}s) extraction {label} - HDD trop lent ou fichier abîmé ?")
+        return False
+    except Exception as e:
+        _safe_remove(vtt_path)
+        print(f"Échec {label} : {e}")
+        return False
+
+    if result.returncode != 0 or not vtt_path.exists() or vtt_path.stat().st_size == 0:
+        _safe_remove(vtt_path)
+        err = (result.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()
+        tail = err[-3:] if err else []
+        print(f"ffmpeg échec {label} (rc={result.returncode}): {' | '.join(tail)}")
+        return False
+    return True
+
+
 def extract_tracks(movie: dict) -> dict:
     """
     Extrait les sous-titres en VTT + liste les pistes audio (métadonnées).
@@ -234,7 +272,24 @@ def extract_tracks(movie: dict) -> dict:
 
             if not srt_changed:
                 try:
-                    return json.loads(metadata_file.read_text(encoding="utf-8"))
+                    cached = json.loads(metadata_file.read_text(encoding="utf-8"))
+                    # Auto-détection des caches incomplets (extractions interrompues
+                    # par un timeout sur HDD). Si des .vtt orphelins traînent ou si
+                    # une exécution précédente n'a pas marqué l'extraction complète,
+                    # on relance entièrement.
+                    cached_tracks = cached.get("subtitle_tracks", [])
+                    vtt_files = list(cache_dir.glob("subs_*.vtt"))
+                    extraction_ok = cached.get("extraction_complete", False)
+                    if extraction_ok and len(vtt_files) == len(cached_tracks):
+                        return cached
+                    print(
+                        f"Cache incomplet pour {movie['filename']} "
+                        f"({len(vtt_files)} VTT sur disque, {len(cached_tracks)} pistes en cache, "
+                        f"complete={extraction_ok}) - relance"
+                    )
+                    # Purge les VTT orphelins avant relance pour repartir propre.
+                    for f in vtt_files:
+                        _safe_remove(f)
                 except Exception:
                     pass
 
@@ -256,6 +311,7 @@ def extract_tracks(movie: dict) -> dict:
         subtitle_tracks = []
         audio_idx = 0
         subs_idx = 0
+        extraction_complete = True
 
         for stream in streams:
             codec_type = stream.get("codec_type")
@@ -279,23 +335,27 @@ def extract_tracks(movie: dict) -> dict:
                     print(f"Sous-titres {lang} ignorés (langue non voulue)")
                 elif codec in SUBS_TEXT_CODECS:
                     vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
-                    try:
-                        subprocess.run([
+                    ok = _run_ffmpeg_subs(
+                        [
                             "ffmpeg", "-y", "-i", str(filepath),
                             "-map", f"0:s:{subs_idx}",
                             "-c:s", "webvtt",
-                            str(vtt_path)
-                        ], capture_output=True, timeout=60)
-                        if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                            subtitle_tracks.append({
-                                "index":    subs_idx,
-                                "language": lang,
-                                "label":    title or _lang_label(lang),
-                                "url":      f"/track/subs/{movie_id}/{subs_idx}",
-                            })
-                            print(f"Sous-titres {lang} : {title or codec}")
-                    except Exception as e:
-                        print(f"Échec sous-titres {subs_idx} : {e}")
+                            str(vtt_path),
+                        ],
+                        vtt_path,
+                        SUBS_TIMEOUT_EMBEDDED,
+                        f"sous-titres {subs_idx} ({lang})",
+                    )
+                    if ok:
+                        subtitle_tracks.append({
+                            "index":    subs_idx,
+                            "language": lang,
+                            "label":    title or _lang_label(lang),
+                            "url":      f"/track/subs/{movie_id}/{subs_idx}",
+                        })
+                        print(f"Sous-titres {lang} : {title or codec}")
+                    else:
+                        extraction_complete = False
                 else:
                     print(f"Sous-titres image ({codec}) ignorés")
                 subs_idx += 1
@@ -312,53 +372,70 @@ def extract_tracks(movie: dict) -> dict:
                     lang = "und"
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+                ok = False
                 try:
                     if ext == '.vtt':
                         shutil.copy(sub_file, vtt_path)
+                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
                     else:
-                        subprocess.run([
-                            "ffmpeg", "-y", "-i", str(sub_file),
-                            "-c:s", "webvtt", str(vtt_path)
-                        ], capture_output=True, timeout=30)
-                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                        subtitle_tracks.append({
-                            "index":    external_idx,
-                            "language": lang,
-                            "label":    f"{_lang_label(lang)} (externe)",
-                            "url":      f"/track/subs/{movie_id}/{external_idx}",
-                        })
-                        print(f"Sous-titres externes : {sub_file.name} ({lang})")
-                        subs_idx += 1
+                        ok = _run_ffmpeg_subs(
+                            ["ffmpeg", "-y", "-i", str(sub_file),
+                             "-c:s", "webvtt", str(vtt_path)],
+                            vtt_path,
+                            SUBS_TIMEOUT_EXTERNAL,
+                            f"sous-titres externes {sub_file.name}",
+                        )
                 except Exception as e:
+                    _safe_remove(vtt_path)
                     print(f"Échec sous-titres externes {sub_file.name} : {e}")
+                if ok:
+                    subtitle_tracks.append({
+                        "index":    external_idx,
+                        "language": lang,
+                        "label":    f"{_lang_label(lang)} (externe)",
+                        "url":      f"/track/subs/{movie_id}/{external_idx}",
+                    })
+                    print(f"Sous-titres externes : {sub_file.name} ({lang})")
+                    subs_idx += 1
+                else:
+                    extraction_complete = False
 
             simple_sub = movie_dir / f"{movie_stem}{ext}"
             if simple_sub.exists():
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+                ok = False
                 try:
                     if ext == '.vtt':
                         shutil.copy(simple_sub, vtt_path)
+                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
                     else:
-                        subprocess.run([
-                            "ffmpeg", "-y", "-i", str(simple_sub),
-                            "-c:s", "webvtt", str(vtt_path)
-                        ], capture_output=True, timeout=30)
-                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                        subtitle_tracks.append({
-                            "index":    external_idx,
-                            "language": "und",
-                            "label":    "Sous-titres (externe)",
-                            "url":      f"/track/subs/{movie_id}/{external_idx}",
-                        })
-                        print(f"Sous-titres externes : {simple_sub.name}")
-                        subs_idx += 1
+                        ok = _run_ffmpeg_subs(
+                            ["ffmpeg", "-y", "-i", str(simple_sub),
+                             "-c:s", "webvtt", str(vtt_path)],
+                            vtt_path,
+                            SUBS_TIMEOUT_EXTERNAL,
+                            f"sous-titres externes {simple_sub.name}",
+                        )
                 except Exception as e:
+                    _safe_remove(vtt_path)
                     print(f"Échec sous-titres externes {simple_sub.name} : {e}")
+                if ok:
+                    subtitle_tracks.append({
+                        "index":    external_idx,
+                        "language": "und",
+                        "label":    "Sous-titres (externe)",
+                        "url":      f"/track/subs/{movie_id}/{external_idx}",
+                    })
+                    print(f"Sous-titres externes : {simple_sub.name}")
+                    subs_idx += 1
+                else:
+                    extraction_complete = False
 
         metadata = {
-            "audio_tracks":    audio_tracks,
-            "subtitle_tracks": subtitle_tracks,
+            "audio_tracks":        audio_tracks,
+            "subtitle_tracks":     subtitle_tracks,
+            "extraction_complete": extraction_complete,
         }
         metadata_file.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
