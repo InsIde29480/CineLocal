@@ -1153,7 +1153,7 @@ def api_refresh():
     with _movies_lock:
         _movies_cache = None
     movies = get_movies()
-    _bg_extractor.enqueue(movies)
+    _bg_extractor.enqueue(list(_playable_index.values()))
     return jsonify({"status": "ok", "count": len(movies)})
 
 
@@ -1360,5 +1360,7 @@ if __name__ == "__main__":
     print("━" * 60)
 
     movies = get_movies()
-    _bg_extractor.enqueue(movies)
+    # On enfile chaque fichier jouable (variantes de qualité + épisodes),
+    # pas les groupes d'items haut-niveau qui n'ont pas de chemin.
+    _bg_extractor.enqueue(list(_playable_index.values()))
     serve(app, host=HOST, port=PORT, threads=8)
