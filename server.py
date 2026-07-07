@@ -7,6 +7,8 @@ Lance avec: python server.py
 import os
 import re
 import json
+import struct
+import hashlib
 import subprocess
 import threading
 import shutil
@@ -23,10 +25,10 @@ from flask import Flask, jsonify, send_file, request, Response, send_from_direct
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-MOVIES_DIR       = Path.home() / "nvme_data"
+MOVIES_DIR       = Path.home() / "storage/6TO/Films"
 STATIC_DIR       = Path(__file__).parent / "static"
-TMDB_CACHE_FILE  = Path(__file__).parent / ".tmdb_cache.json"
-TRACKS_CACHE_DIR = Path(__file__).parent / ".tracks_cache"
+TMDB_CACHE_FILE  = Path.home() / "storage/6TO/.tmdb_cache.json"
+TRACKS_CACHE_DIR = Path.home() / "storage/6TO/.tracks_cache"
 
 SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
@@ -34,11 +36,139 @@ PORT             = 8765
 
 TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
 
+# ─── OpenSubtitles (téléchargement des sous-titres manquants) ─────────────────
+# Beaucoup de rips BluRay n'ont que des sous-titres PGS (image) : impossible à
+# convertir en texte sans OCR. On récupère alors de vrais .srt texte en ligne.
+#
+# À REMPLIR (compte gratuit sur https://www.opensubtitles.com puis
+# https://www.opensubtitles.com/consumers pour la clé API) :
+#   - OPENSUBTITLES_API_KEY  : clé « consumer » (obligatoire)
+#   - OPENSUBTITLES_USERNAME / OPENSUBTITLES_PASSWORD : identifiants du compte
+#     (obligatoires pour TÉLÉCHARGER ; la recherche seule n'en a pas besoin)
+# Sans ces valeurs, le bouton de téléchargement reste inactif et l'explique.
+OPENSUBTITLES_API_KEY    = ""
+OPENSUBTITLES_USERNAME   = ""
+OPENSUBTITLES_PASSWORD   = ""
+OPENSUBTITLES_LANGS      = ["fr", "en"]   # ordre de préférence : fr d'abord, en en secours
+OPENSUBTITLES_USER_AGENT = "CineLocal v1.0"
+OPENSUBTITLES_BASE       = "https://api.opensubtitles.com/api/v1"
+
+# ─── Paramètres modifiables depuis l'interface (persistés) ───────────────────
+# Les valeurs ci-dessus servent de valeurs PAR DÉFAUT. Elles peuvent être
+# surchargées via l'onglet « Paramètres » du site ; la config est alors
+# sauvegardée dans SETTINGS_FILE et rechargée à chaque démarrage.
+SETTINGS_FILE  = Path.home() / "storage/6TO/.cinelocal_settings.json"
+_settings_lock = threading.Lock()
+
+# Valeurs par défaut des chemins (capturées avant toute surcharge par settings).
+_DEFAULT_MOVIES_DIR       = MOVIES_DIR
+_DEFAULT_TRACKS_CACHE_DIR = TRACKS_CACHE_DIR
+
+
+def _default_settings() -> dict:
+    return {
+        "tmdb_api_key":           TMDB_API_KEY,
+        "opensubtitles_api_key":  OPENSUBTITLES_API_KEY,
+        "opensubtitles_username": OPENSUBTITLES_USERNAME,
+        "opensubtitles_password": OPENSUBTITLES_PASSWORD,
+        "opensubtitles_langs":    list(OPENSUBTITLES_LANGS),
+        "movies_dir":             str(_DEFAULT_MOVIES_DIR),
+        "tracks_cache_dir":       str(_DEFAULT_TRACKS_CACHE_DIR),
+    }
+
+
+def _load_settings() -> dict:
+    s = _default_settings()
+    if SETTINGS_FILE.exists():
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            for k in s:
+                if k in data and data[k] not in (None, ""):
+                    s[k] = data[k]
+        except Exception as e:
+            print(f"Lecture des paramètres échouée : {e}")
+    return s
+
+
+_settings = _load_settings()
+
+
+def _apply_paths_from_settings():
+    """Rebinde les chemins (films / cache sous-titres) depuis les paramètres."""
+    global MOVIES_DIR, TRACKS_CACHE_DIR
+    MOVIES_DIR = Path(_settings["movies_dir"]).expanduser()
+    TRACKS_CACHE_DIR = Path(_settings["tracks_cache_dir"]).expanduser()
+    try:
+        TRACKS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Création du dossier des sous-titres échouée ({TRACKS_CACHE_DIR}) : {e}")
+
+
+# Applique les chemins configurés dès le chargement (avant tout scan / mkdir).
+_apply_paths_from_settings()
+
+
+def save_settings(new: dict) -> bool:
+    """Fusionne et persiste les paramètres. Réinitialise le jeton OpenSubtitles."""
+    global _os_token
+    with _settings_lock:
+        for k in _default_settings():
+            if k in new and new[k] is not None:
+                _settings[k] = new[k]
+        try:
+            SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            SETTINGS_FILE.write_text(
+                json.dumps(_settings, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"Écriture des paramètres échouée : {e}")
+            return False
+    _os_token = None   # identifiants potentiellement changés → nouvelle connexion
+    return True
+
 VIDEO_OK         = {"h264"}
 AUDIO_OK         = {"aac", "mp3"}
 BROWSER_AUDIO_OK = {"aac", "mp3", "opus", "vorbis"}
 SUBS_TEXT_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "srt"}
 SUBS_LANG_OK     = {"fre", "fra", "fr", "francais", "français", "eng", "en", "english", "und", "vo"}
+
+# Par défaut on extrait les sous-titres TEXTE de toutes les langues : mieux vaut
+# tout proposer et laisser l'utilisateur choisir dans l'interface que de rater
+# un sous-titre parce que sa langue n'était pas dans la liste ci-dessus.
+# Passe à False pour te limiter strictement à SUBS_LANG_OK.
+SUBS_ACCEPT_ALL_LANGS = True
+
+# Timeouts ffmpeg pour l'extraction des sous-titres.
+# ATTENTION : ce ne sont PAS des plafonds de temps total, mais des délais
+# d'INACTIVITÉ. ffmpeg n'est tué que si aucune progression n'est détectée
+# pendant ce laps de temps. Une extraction longue (film avec des milliers de
+# lignes de sous-titres sur un HDD) peut donc durer bien plus longtemps tant
+# qu'elle avance — elle ne s'arrête que si elle est réellement bloquée.
+SUBS_TIMEOUT_EMBEDDED = 300   # 5 min sans aucune avancée : extraction depuis un MKV
+SUBS_TIMEOUT_EXTERNAL = 180   # 3 min sans aucune avancée : conversion .srt -> .vtt
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IDENTIFIANTS STABLES
+# ══════════════════════════════════════════════════════════════════════════════
+# IMPORTANT : on n'utilise PAS hash() de Python pour générer les identifiants.
+# hash() sur une chaîne est randomisé à chaque démarrage du processus
+# (PYTHONHASHSEED), donc après un « systemctl restart » tous les movie_id
+# changeaient → le cache .tracks_cache/<id> devenait orphelin et les
+# sous-titres devaient être ré-extraits à chaque redémarrage.
+#
+# On dérive maintenant l'identifiant d'un MD5 du chemin : stable tant que le
+# fichier ne bouge pas, donc le cache (sous-titres, remux audio) survit aux
+# redémarrages du service.
+
+def stable_file_id(filepath) -> str:
+    """ID stable et déterministe d'un fichier (survit aux redémarrages)."""
+    return hashlib.md5(str(filepath).encode("utf-8")).hexdigest()[:16]
+
+
+def stable_group_id(key: str) -> str:
+    """ID stable pour un groupe (série)."""
+    return "s_" + hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -202,10 +332,128 @@ def _lang_label(code: str) -> str:
 _extraction_locks = {}
 
 
-def extract_tracks(movie: dict) -> dict:
+def _safe_remove(path: Path):
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _run_ffmpeg_subs(cmd: list, vtt_path: Path, idle_timeout: int, label: str):
+    """
+    Lance ffmpeg pour produire un VTT. Renvoie (ok, reason) :
+      - (True, None) si le fichier est réellement utilisable ;
+      - (False, "raison") en cas d'échec (le fichier partiel est supprimé).
+
+    IMPORTANT : `idle_timeout` est un délai d'INACTIVITÉ, pas un plafond de temps
+    total. ffmpeg n'est tué que si AUCUNE progression n'est détectée pendant
+    `idle_timeout` secondes. Un film avec des milliers de lignes de sous-titres
+    sur un HDD peut donc prendre bien plus de temps que ça, tant qu'il avance.
+
+    La progression est détectée de deux façons redondantes :
+      1. la sortie `-progress pipe:1` de ffmpeg (mise à jour ~2×/s) ;
+      2. la taille du fichier VTT de sortie qui augmente.
+    """
+    # `-progress pipe:1` doit être placé AVANT le fichier de sortie (dernier arg),
+    # sinon ffmpeg l'interpréterait comme une seconde sortie.
+    full_cmd = cmd[:-1] + ["-progress", "pipe:1", cmd[-1]]
+
+    last_activity = [time.time()]      # liste = mutable partagé avec les threads
+    stderr_tail = []
+
+    try:
+        proc = subprocess.Popen(
+            full_cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+    except Exception as e:
+        _safe_remove(vtt_path)
+        print(f"Échec {label} : {e}")
+        return False, str(e)
+
+    def _drain_stdout():
+        # Toute ligne de -progress (out_time=…, progress=continue/end…) = signe de vie.
+        try:
+            for _line in proc.stdout:
+                last_activity[0] = time.time()
+        except Exception:
+            pass
+
+    def _drain_stderr():
+        # On garde les dernières lignes pour expliquer un éventuel échec.
+        try:
+            for line in proc.stderr:
+                line = line.rstrip()
+                if line:
+                    stderr_tail.append(line)
+                    if len(stderr_tail) > 10:
+                        del stderr_tail[0]
+        except Exception:
+            pass
+
+    t_out = threading.Thread(target=_drain_stdout, daemon=True)
+    t_err = threading.Thread(target=_drain_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    killed_idle = False
+    last_size = -1
+    while True:
+        try:
+            proc.wait(timeout=2)
+            break                       # ffmpeg a terminé (ok ou erreur)
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Secours : le VTT grossit-il ? (utile si -progress reste muet un instant)
+        try:
+            if vtt_path.exists():
+                sz = vtt_path.stat().st_size
+                if sz != last_size:
+                    last_size = sz
+                    last_activity[0] = time.time()
+        except Exception:
+            pass
+
+        # Tue uniquement en cas d'inactivité prolongée — jamais sur le temps total.
+        if time.time() - last_activity[0] > idle_timeout:
+            killed_idle = True
+            try:
+                proc.kill()
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+            break
+
+    t_out.join(timeout=1)
+    t_err.join(timeout=1)
+
+    if killed_idle:
+        _safe_remove(vtt_path)
+        reason = f"Bloqué : aucune progression pendant {idle_timeout}s (HDD trop lent ou fichier abîmé ?)"
+        print(f"Extraction {label} tuée pour inactivité ({idle_timeout}s)")
+        return False, reason
+
+    if proc.returncode != 0 or not vtt_path.exists() or vtt_path.stat().st_size == 0:
+        _safe_remove(vtt_path)
+        tail = stderr_tail[-3:] if stderr_tail else []
+        reason = ' | '.join(tail) if tail else f"ffmpeg code {proc.returncode}"
+        print(f"ffmpeg échec {label} (rc={proc.returncode}): {reason}")
+        return False, reason
+    return True, None
+
+
+def extract_tracks(movie: dict, force: bool = False) -> dict:
     """
     Extrait les sous-titres en VTT + liste les pistes audio (métadonnées).
     Cache dans .tracks_cache/<movie_id>/tracks.json
+
+    force=True : ignore COMPLÈTEMENT tout cache existant, supprime le dossier du
+    film et ré-extrait de zéro (utilisé par la reprise « échecs / sans S-T » et
+    le « tout ré-extraire »). C'est ce qui garantit qu'on relance vraiment
+    ffmpeg au lieu de se contenter de constater qu'un dossier existe déjà.
     """
     movie_id = movie["id"]
     filepath = movie["path"]
@@ -216,8 +464,15 @@ def extract_tracks(movie: dict) -> dict:
         _extraction_locks[movie_id] = threading.Lock()
 
     with _extraction_locks[movie_id]:
-        # Vérifie les SRT externes modifiés
-        if metadata_file.exists():
+        if force:
+            # Reprise forcée : on repart d'un dossier vierge, sans consulter le
+            # moindre cache. Suppression puis ré-extraction intégrale.
+            if cache_dir.exists():
+                print(f"Reprise : suppression du cache existant → {movie['filename']}")
+                shutil.rmtree(cache_dir, ignore_errors=True)
+
+        # Vérifie les SRT externes modifiés (sauté en mode forcé)
+        if not force and metadata_file.exists():
             cache_mtime = metadata_file.stat().st_mtime
             movie_dir = Path(filepath).parent
             movie_stem = Path(filepath).stem
@@ -234,7 +489,24 @@ def extract_tracks(movie: dict) -> dict:
 
             if not srt_changed:
                 try:
-                    return json.loads(metadata_file.read_text(encoding="utf-8"))
+                    cached = json.loads(metadata_file.read_text(encoding="utf-8"))
+                    # Auto-détection des caches incomplets (extractions interrompues
+                    # par un timeout sur HDD). Si des .vtt orphelins traînent ou si
+                    # une exécution précédente n'a pas marqué l'extraction complète,
+                    # on relance entièrement.
+                    cached_tracks = cached.get("subtitle_tracks", [])
+                    vtt_files = list(cache_dir.glob("subs_*.vtt"))
+                    extraction_ok = cached.get("extraction_complete", False)
+                    if extraction_ok and len(vtt_files) == len(cached_tracks):
+                        return cached
+                    print(
+                        f"Cache incomplet pour {movie['filename']} "
+                        f"({len(vtt_files)} VTT sur disque, {len(cached_tracks)} pistes en cache, "
+                        f"complete={extraction_ok}) - relance"
+                    )
+                    # Purge les VTT orphelins avant relance pour repartir propre.
+                    for f in vtt_files:
+                        _safe_remove(f)
                 except Exception:
                     pass
 
@@ -254,8 +526,11 @@ def extract_tracks(movie: dict) -> dict:
         streams = data.get("streams", [])
         audio_tracks = []
         subtitle_tracks = []
+        failures = []               # raisons d'échec d'extraction
+        skipped  = []               # pistes écartées SANS erreur (image, langue)
         audio_idx = 0
         subs_idx = 0
+        extraction_complete = True
 
         for stream in streams:
             codec_type = stream.get("codec_type")
@@ -274,30 +549,40 @@ def extract_tracks(movie: dict) -> dict:
                 audio_idx += 1
 
             elif codec_type == "subtitle":
-                codec = stream.get("codec_name", "")
-                if lang not in SUBS_LANG_OK:
-                    print(f"Sous-titres {lang} ignorés (langue non voulue)")
+                codec = stream.get("codec_name", "") or ""
+                if not SUBS_ACCEPT_ALL_LANGS and lang not in SUBS_LANG_OK:
+                    msg = f"Piste {subs_idx} « {_lang_label(lang)} » ignorée (langue non retenue)"
+                    print(msg)
+                    skipped.append(msg)
                 elif codec in SUBS_TEXT_CODECS:
                     vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
-                    try:
-                        subprocess.run([
+                    ok, reason = _run_ffmpeg_subs(
+                        [
                             "ffmpeg", "-y", "-i", str(filepath),
                             "-map", f"0:s:{subs_idx}",
                             "-c:s", "webvtt",
-                            str(vtt_path)
-                        ], capture_output=True, timeout=60)
-                        if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                            subtitle_tracks.append({
-                                "index":    subs_idx,
-                                "language": lang,
-                                "label":    title or _lang_label(lang),
-                                "url":      f"/track/subs/{movie_id}/{subs_idx}",
-                            })
-                            print(f"Sous-titres {lang} : {title or codec}")
-                    except Exception as e:
-                        print(f"Échec sous-titres {subs_idx} : {e}")
+                            str(vtt_path),
+                        ],
+                        vtt_path,
+                        SUBS_TIMEOUT_EMBEDDED,
+                        f"sous-titres {subs_idx} ({lang})",
+                    )
+                    if ok:
+                        subtitle_tracks.append({
+                            "index":    subs_idx,
+                            "language": lang,
+                            "label":    title or _lang_label(lang),
+                            "url":      f"/track/subs/{movie_id}/{subs_idx}",
+                        })
+                        print(f"Sous-titres {lang} : {title or codec}")
+                    else:
+                        extraction_complete = False
+                        failures.append(f"Piste {_lang_label(lang)} ({codec}) : {reason}")
                 else:
-                    print(f"Sous-titres image ({codec}) ignorés")
+                    msg = (f"Piste {subs_idx} « {_lang_label(lang)} » image "
+                           f"({codec or 'inconnu'}) ignorée — non convertible en texte (OCR requis)")
+                    print(msg)
+                    skipped.append(msg)
                 subs_idx += 1
 
         # Sous-titres externes
@@ -312,53 +597,82 @@ def extract_tracks(movie: dict) -> dict:
                     lang = "und"
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+                ok = False
+                reason = "erreur inconnue"
                 try:
                     if ext == '.vtt':
                         shutil.copy(sub_file, vtt_path)
+                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
+                        if not ok:
+                            reason = "fichier VTT vide/illisible"
                     else:
-                        subprocess.run([
-                            "ffmpeg", "-y", "-i", str(sub_file),
-                            "-c:s", "webvtt", str(vtt_path)
-                        ], capture_output=True, timeout=30)
-                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                        subtitle_tracks.append({
-                            "index":    external_idx,
-                            "language": lang,
-                            "label":    f"{_lang_label(lang)} (externe)",
-                            "url":      f"/track/subs/{movie_id}/{external_idx}",
-                        })
-                        print(f"Sous-titres externes : {sub_file.name} ({lang})")
-                        subs_idx += 1
+                        ok, reason = _run_ffmpeg_subs(
+                            ["ffmpeg", "-y", "-i", str(sub_file),
+                             "-c:s", "webvtt", str(vtt_path)],
+                            vtt_path,
+                            SUBS_TIMEOUT_EXTERNAL,
+                            f"sous-titres externes {sub_file.name}",
+                        )
                 except Exception as e:
+                    _safe_remove(vtt_path)
+                    reason = str(e)
                     print(f"Échec sous-titres externes {sub_file.name} : {e}")
+                if ok:
+                    subtitle_tracks.append({
+                        "index":    external_idx,
+                        "language": lang,
+                        "label":    f"{_lang_label(lang)} (externe)",
+                        "url":      f"/track/subs/{movie_id}/{external_idx}",
+                    })
+                    print(f"Sous-titres externes : {sub_file.name} ({lang})")
+                    subs_idx += 1
+                else:
+                    extraction_complete = False
+                    failures.append(f"Externe {sub_file.name} : {reason}")
 
             simple_sub = movie_dir / f"{movie_stem}{ext}"
             if simple_sub.exists():
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
+                ok = False
+                reason = "erreur inconnue"
                 try:
                     if ext == '.vtt':
                         shutil.copy(simple_sub, vtt_path)
+                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
+                        if not ok:
+                            reason = "fichier VTT vide/illisible"
                     else:
-                        subprocess.run([
-                            "ffmpeg", "-y", "-i", str(simple_sub),
-                            "-c:s", "webvtt", str(vtt_path)
-                        ], capture_output=True, timeout=30)
-                    if vtt_path.exists() and vtt_path.stat().st_size > 0:
-                        subtitle_tracks.append({
-                            "index":    external_idx,
-                            "language": "und",
-                            "label":    "Sous-titres (externe)",
-                            "url":      f"/track/subs/{movie_id}/{external_idx}",
-                        })
-                        print(f"Sous-titres externes : {simple_sub.name}")
-                        subs_idx += 1
+                        ok, reason = _run_ffmpeg_subs(
+                            ["ffmpeg", "-y", "-i", str(simple_sub),
+                             "-c:s", "webvtt", str(vtt_path)],
+                            vtt_path,
+                            SUBS_TIMEOUT_EXTERNAL,
+                            f"sous-titres externes {simple_sub.name}",
+                        )
                 except Exception as e:
+                    _safe_remove(vtt_path)
+                    reason = str(e)
                     print(f"Échec sous-titres externes {simple_sub.name} : {e}")
+                if ok:
+                    subtitle_tracks.append({
+                        "index":    external_idx,
+                        "language": "und",
+                        "label":    "Sous-titres (externe)",
+                        "url":      f"/track/subs/{movie_id}/{external_idx}",
+                    })
+                    print(f"Sous-titres externes : {simple_sub.name}")
+                    subs_idx += 1
+                else:
+                    extraction_complete = False
+                    failures.append(f"Externe {simple_sub.name} : {reason}")
 
         metadata = {
-            "audio_tracks":    audio_tracks,
-            "subtitle_tracks": subtitle_tracks,
+            "audio_tracks":        audio_tracks,
+            "subtitle_tracks":     subtitle_tracks,
+            "extraction_complete": extraction_complete,
+            "failures":            failures,
+            "skipped":             skipped,
         }
         metadata_file.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -372,6 +686,193 @@ def clear_tracks_cache(movie_id: str):
     cache_dir = TRACKS_CACHE_DIR / movie_id
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OPENSUBTITLES — téléchargement des sous-titres manquants
+# ══════════════════════════════════════════════════════════════════════════════
+# Pour les films dont les seuls sous-titres sont des images (PGS), on récupère
+# un vrai .srt texte en ligne et on l'enregistre à côté du film sous la forme
+# « NomDuFilm.fr.srt » : le pipeline d'extraction existant le détecte alors
+# automatiquement et le convertit en VTT.
+
+_os_token = None            # jeton d'authentification OpenSubtitles (login)
+_os_token_lock = threading.Lock()
+
+
+def opensubtitles_hash(path: str) -> str | None:
+    """
+    Empreinte OpenSubtitles d'un fichier vidéo : taille + somme des 64 Kio de
+    début et de fin (algorithme officiel). Permet un appariement fiable.
+    """
+    try:
+        fmt = "<q"                       # entier 64 bits little-endian
+        bsize = struct.calcsize(fmt)
+        filesize = os.path.getsize(path)
+        if filesize < 65536 * 2:
+            return None                  # fichier trop petit
+        h = filesize
+        with open(path, "rb") as f:
+            for _ in range(65536 // bsize):
+                (val,) = struct.unpack(fmt, f.read(bsize))
+                h = (h + val) & 0xFFFFFFFFFFFFFFFF
+            f.seek(max(0, filesize - 65536), 0)
+            for _ in range(65536 // bsize):
+                (val,) = struct.unpack(fmt, f.read(bsize))
+                h = (h + val) & 0xFFFFFFFFFFFFFFFF
+        return "%016x" % h
+    except Exception as e:
+        print(f"Hash OpenSubtitles échec ({path}) : {e}")
+        return None
+
+
+def _os_headers(with_auth: bool = False) -> dict:
+    h = {
+        "Api-Key":      _settings["opensubtitles_api_key"],
+        "Content-Type": "application/json",
+        "User-Agent":   OPENSUBTITLES_USER_AGENT,
+    }
+    if with_auth and _os_token:
+        h["Authorization"] = f"Bearer {_os_token}"
+    return h
+
+
+def _os_login() -> tuple:
+    """Ouvre une session OpenSubtitles (nécessaire pour télécharger). (ok, reason)."""
+    global _os_token
+    if _os_token:
+        return True, None
+    username = _settings["opensubtitles_username"]
+    password = _settings["opensubtitles_password"]
+    if not (username and password):
+        return False, "identifiants OpenSubtitles non configurés (username/password)"
+    with _os_token_lock:
+        if _os_token:
+            return True, None
+        try:
+            r = requests.post(
+                f"{OPENSUBTITLES_BASE}/login",
+                headers=_os_headers(),
+                json={"username": username, "password": password},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return False, f"login refusé (HTTP {r.status_code})"
+            _os_token = r.json().get("token")
+            return (True, None) if _os_token else (False, "login sans jeton")
+        except Exception as e:
+            return False, f"login injoignable : {e}"
+
+
+def _os_search(movie: dict, lang: str):
+    """Cherche un sous-titre pour un film dans une langue. Renvoie le meilleur file_id ou None."""
+    params_base = {"languages": lang}
+    mh = movie.get("_os_hash")
+    attempts = []
+    if mh:
+        attempts.append({**params_base, "moviehash": mh})
+    # Repli par titre (+ année) si le hash ne donne rien.
+    query = movie.get("title") or Path(movie["path"]).stem
+    q = {**params_base, "query": query}
+    if movie.get("year"):
+        q["year"] = movie["year"]
+    attempts.append(q)
+
+    for params in attempts:
+        try:
+            r = requests.get(
+                f"{OPENSUBTITLES_BASE}/subtitles",
+                headers=_os_headers(), params=params, timeout=15,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json().get("data", [])
+            if not data:
+                continue
+            # Priorité : correspondance par hash, puis nombre de téléchargements.
+            def score(item):
+                attr = item.get("attributes", {})
+                return (1 if attr.get("moviehash_match") else 0,
+                        attr.get("download_count", 0) or 0)
+            data.sort(key=score, reverse=True)
+            for item in data:
+                files = item.get("attributes", {}).get("files", [])
+                if files and files[0].get("file_id"):
+                    return files[0]["file_id"]
+        except Exception as e:
+            print(f"Recherche OpenSubtitles échec ({lang}) : {e}")
+    return None
+
+
+def _os_download_content(file_id) -> tuple:
+    """Récupère le contenu SRT d'un file_id. (texte|None, reason)."""
+    ok, reason = _os_login()
+    if not ok:
+        return None, reason
+    try:
+        r = requests.post(
+            f"{OPENSUBTITLES_BASE}/download",
+            headers=_os_headers(with_auth=True),
+            json={"file_id": file_id}, timeout=20,
+        )
+        if r.status_code == 406:
+            return None, "quota de téléchargements OpenSubtitles atteint (réessaie demain)"
+        if r.status_code == 401:
+            # jeton expiré : on force une nouvelle connexion au prochain appel
+            globals()["_os_token"] = None
+            return None, "session expirée (réessaie)"
+        if r.status_code != 200:
+            return None, f"téléchargement refusé (HTTP {r.status_code})"
+        link = r.json().get("link")
+        if not link:
+            return None, "lien de téléchargement absent"
+        dl = requests.get(link, timeout=30)
+        if dl.status_code != 200 or not dl.content:
+            return None, f"contenu injoignable (HTTP {dl.status_code})"
+        return dl.content.decode("utf-8", errors="replace"), None
+    except Exception as e:
+        return None, f"téléchargement injoignable : {e}"
+
+
+def download_subtitle_for(movie: dict) -> tuple:
+    """
+    Télécharge un sous-titre pour un film qui n'a pas de français.
+    Priorité au français ; l'anglais n'est tenté en secours QUE si le film n'a
+    encore aucun sous-titre (inutile de retélécharger une langue déjà présente).
+    Enregistre à côté du film sous « stem.<lang>.srt ».
+    Renvoie (ok, info) — info = langue téléchargée ou raison de l'échec.
+    """
+    if not _settings["opensubtitles_api_key"]:
+        return False, "clé API OpenSubtitles non configurée (onglet Paramètres)"
+
+    path = movie["path"]
+    movie["_os_hash"] = opensubtitles_hash(path)
+
+    have = _cached_sub_langs(movie["id"])   # langues déjà disponibles
+    last_reason = "aucun sous-titre français trouvé en ligne"
+    for lang in (_settings["opensubtitles_langs"] or ["fr", "en"]):
+        if lang in have:
+            continue    # déjà présent (ex. l'anglais) → on ne le retélécharge pas
+        file_id = _os_search(movie, lang)
+        if not file_id:
+            continue
+        content, reason = _os_download_content(file_id)
+        if not content:
+            last_reason = reason or last_reason
+            # Quota atteint : inutile d'insister sur les autres langues.
+            if reason and "quota" in reason:
+                return False, reason
+            continue
+        stem = Path(path).stem
+        srt_path = Path(path).parent / f"{stem}.{lang}.srt"
+        try:
+            srt_path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            return False, f"écriture impossible ({srt_path.name}) : {e} — dossier en lecture seule ?"
+        print(f"Sous-titre téléchargé ({lang}) : {srt_path.name}")
+        return True, lang
+
+    return False, last_reason
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -418,7 +919,7 @@ def _fetch_tmdb_tv(title: str) -> dict | None:
     try:
         r = requests.get(
             "https://api.themoviedb.org/3/search/tv",
-            params={"api_key": TMDB_API_KEY, "query": clean, "language": "fr-FR"},
+            params={"api_key": _settings["tmdb_api_key"], "query": clean, "language": "fr-FR"},
             timeout=5
         )
         results = r.json().get("results", [])
@@ -441,7 +942,7 @@ def _fetch_tmdb_movie(title: str, year: str | None) -> dict | None:
     if key in _tmdb_cache:
         return _tmdb_cache[key]
     try:
-        params = {"api_key": TMDB_API_KEY, "query": query, "language": "fr-FR"}
+        params = {"api_key": _settings["tmdb_api_key"], "query": query, "language": "fr-FR"}
         if year:
             params["year"] = year
         r = requests.get("https://api.themoviedb.org/3/search/movie", params=params, timeout=5)
@@ -488,7 +989,7 @@ def scan_movies() -> list:
         if any(part.startswith(".") for part in rel.parts):
             continue
 
-        movie_id = str(hash(str(filepath)) & 0xFFFFFFFF)
+        movie_id = stable_file_id(filepath)
         ep = parse_episode(filepath.name)
 
         category = rel.parts[0] if len(rel.parts) > 1 else "Films"
@@ -573,7 +1074,7 @@ def scan_movies() -> list:
         })
 
     for group_key, group in series_groups.items():
-        series_id = "s_" + str(hash(group_key) & 0xFFFFFFFF)
+        series_id = stable_group_id(group_key)
         group["episodes"].sort(key=lambda e: (e["season"], e["episode"]))
         items.append({
             "id":          series_id,
@@ -640,6 +1141,260 @@ def get_movie_by_id(movie_id: str) -> dict | None:
     # Toutes les variantes de qualité et tous les épisodes sont indexés à plat
     # par leur id de fichier — c'est ce que la lecture/cast/pistes utilisent.
     return _playable_index.get(movie_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXTRACTION EN MASSE DES SOUS-TITRES (balayage profond du dossier Films)
+# ══════════════════════════════════════════════════════════════════════════════
+# Extrait à l'avance les sous-titres de TOUS les fichiers (films + épisodes),
+# sans attendre qu'on clique sur un film. Le résultat est mis en cache dans
+# .tracks_cache/<id> avec un id MD5 stable, donc il survit à un redémarrage du
+# service : au prochain lancement, seuls les fichiers nouveaux/modifiés sont
+# ré-extraits.
+
+_subs_scan_lock  = threading.Lock()
+_subs_scan_thread = None
+_subs_scan_state = {
+    "running":     False,
+    "mode":        None,  # 'new' | 'retry' | 'force' | 'download'
+    "started_at":  None,
+    "finished_at": None,
+    "total":       0,     # nombre total de fichiers à traiter
+    "done":        0,     # fichiers traités
+    "current":     None,  # fichier en cours d'extraction
+    "with_subs":     0,   # fichiers pour lesquels au moins un sous-titre a été produit
+    "no_subs":       0,   # fichiers sans aucun sous-titre exploitable
+    "failed":        0,   # fichiers avec au moins un échec d'extraction
+    "downloaded":    0,   # sous-titres récupérés en ligne (mode 'download')
+    "failures":      [],  # [{filename, title, reasons: [...]}]
+    "no_subs_files": [],  # [{filename, title, reasons: [...]}] — pour vérification manuelle
+}
+
+
+def _public_scan_state() -> dict:
+    with _subs_scan_lock:
+        st = dict(_subs_scan_state)
+        st["failures"]      = list(_subs_scan_state["failures"])
+        st["no_subs_files"] = list(_subs_scan_state["no_subs_files"])
+    return st
+
+
+def _cached_subs_state(movie_id: str) -> str:
+    """
+    État en cache d'un fichier, sans rien ré-extraire :
+      'has_subs'  → au moins un sous-titre exploitable déjà en cache ;
+      'no_subs'   → extraction complète mais aucun sous-titre trouvé ;
+      'failed'    → une extraction précédente a échoué (incomplète) ;
+      'none'      → jamais scanné.
+    """
+    meta_file = TRACKS_CACHE_DIR / movie_id / "tracks.json"
+    if not meta_file.exists():
+        return "none"
+    try:
+        data = json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return "none"
+    if not data.get("extraction_complete", False):
+        return "failed"
+    if len(data.get("subtitle_tracks", [])) == 0:
+        return "no_subs"
+    return "has_subs"
+
+
+def _needs_retry(movie_id: str) -> bool:
+    """Vrai pour les fichiers à reprendre en mode 'retry' (échecs, sans S-T, jamais scannés)."""
+    return _cached_subs_state(movie_id) != "has_subs"
+
+
+def _norm_lang(code: str) -> str:
+    """Normalise un code de langue (fre/fra/french → fr, eng/english → en)."""
+    c = (code or "").lower()
+    if c in ("fr", "fre", "fra", "french", "francais", "français"):
+        return "fr"
+    if c in ("en", "eng", "english"):
+        return "en"
+    return c
+
+
+def _cached_sub_langs(movie_id: str) -> set:
+    """Ensemble des langues de sous-titres déjà en cache pour un film (normalisées)."""
+    meta_file = TRACKS_CACHE_DIR / movie_id / "tracks.json"
+    langs = set()
+    if meta_file.exists():
+        try:
+            data = json.loads(meta_file.read_text(encoding="utf-8"))
+            for t in data.get("subtitle_tracks", []):
+                langs.add(_norm_lang(t.get("language")))
+        except Exception:
+            pass
+    return langs
+
+
+def _needs_download(movie_id: str) -> bool:
+    """
+    Vrai si le film n'a PAS de sous-titre français : aucun sous-titre du tout,
+    seulement de l'anglais, ou seulement des externes non-français. C'est ce qui
+    déclenche le téléchargement d'un .srt français en ligne.
+    """
+    return "fr" not in _cached_sub_langs(movie_id)
+
+
+def _run_subtitle_scan(mode: str = "new"):
+    """
+    Balaie les fichiers jouables et extrait leurs sous-titres.
+    Exécuté dans un thread de fond. Séquentiel volontairement : sur un HDD,
+    lancer plusieurs ffmpeg en parallèle ralentit tout le monde (seeks concurrents).
+
+    mode :
+      'new'   → tout vérifier ; les fichiers déjà complets en cache sont sautés
+                instantanément (comportement par défaut / démarrage).
+      'retry' → ne reprend QUE les échecs et les fichiers sans sous-titre
+                (leur cache est purgé puis ré-extrait). Ceux qui ont déjà des
+                sous-titres ne sont pas touchés.
+      'force' → purge TOUS les caches puis tout ré-extrait.
+      'download' → pour les fichiers SANS sous-titre texte, télécharge un .srt
+                en ligne (OpenSubtitles, fr puis en) et le convertit en VTT.
+    """
+    get_movies()   # garantit le scan + le remplissage de _playable_index
+    items = list(_playable_index.values())
+
+    # 'retry' cible les échecs et fichiers sans sous-titre ; 'download' cible les
+    # films sans sous-titre FRANÇAIS (rien, ou seulement anglais/externe).
+    if mode == "retry":
+        items = [it for it in items if _needs_retry(it["id"])]
+    elif mode == "download":
+        items = [it for it in items if _needs_download(it["id"])]
+
+    with _subs_scan_lock:
+        _subs_scan_state.update({
+            "running":     True,
+            "mode":        mode,
+            "started_at":  time.time(),
+            "finished_at": None,
+            "total":       len(items),
+            "done":        0,
+            "current":     None,
+            "with_subs":     0,
+            "no_subs":       0,
+            "failed":        0,
+            "downloaded":    0,
+            "failures":      [],
+            "no_subs_files": [],
+        })
+
+    labels = {
+        "new": "vérification", "retry": "reprise des échecs/sans S-T",
+        "force": "forcée", "download": "téléchargement en ligne",
+    }
+    print(f"Extraction des sous-titres ({labels.get(mode, mode)}) : {len(items)} fichier(s)")
+
+    for item in items:
+        filename = item.get("filename", "?")
+        title    = item.get("title") or filename
+        with _subs_scan_lock:
+            _subs_scan_state["current"] = filename
+
+        try:
+            if mode == "download":
+                # Télécharge un .srt français à côté du film puis (re)extrait pour
+                # le convertir en VTT via le pipeline « sous-titres externes ».
+                dl_ok, dl_info = download_subtitle_for(item)
+                meta = extract_tracks(item, force=True)
+                reasons = meta.get("failures", [])
+                present = _cached_sub_langs(item["id"])   # langues après extraction
+                has_fr  = "fr" in present
+                with _subs_scan_lock:
+                    if reasons:
+                        _subs_scan_state["failed"] += 1
+                        _subs_scan_state["failures"].append({
+                            "filename": filename, "title": title, "reasons": reasons,
+                        })
+                    if has_fr:
+                        _subs_scan_state["with_subs"] += 1
+                        if dl_ok:
+                            _subs_scan_state["downloaded"] += 1
+                    else:
+                        # Toujours pas de français : on liste pourquoi (raison du
+                        # téléchargement + langues déjà présentes le cas échéant).
+                        _subs_scan_state["no_subs"] += 1
+                        why = []
+                        if dl_info:
+                            why.append(f"Téléchargement : {dl_info}")
+                        others = sorted(l for l in present if l and l != "und")
+                        if others:
+                            why.append("Sous-titres présents (pas de FR) : " + ", ".join(others))
+                        why += meta.get("skipped", [])
+                        if not why:
+                            why = ["Aucun sous-titre français disponible"]
+                        _subs_scan_state["no_subs_files"].append({
+                            "filename": filename, "title": title, "reasons": why,
+                        })
+            else:
+                # 'force' et 'retry' relancent une extraction complète : on passe
+                # force=True à extract_tracks, qui supprime le dossier du film et
+                # ré-extrait de zéro (au lieu de réutiliser le cache existant).
+                hard = mode in ("force", "retry")
+                meta = extract_tracks(item, force=hard)
+                n_subs   = len(meta.get("subtitle_tracks", []))
+                reasons  = meta.get("failures", [])
+                with _subs_scan_lock:
+                    if reasons:
+                        _subs_scan_state["failed"] += 1
+                        _subs_scan_state["failures"].append({
+                            "filename": filename,
+                            "title":    title,
+                            "reasons":  reasons,
+                        })
+                    if n_subs > 0:
+                        _subs_scan_state["with_subs"] += 1
+                    else:
+                        _subs_scan_state["no_subs"] += 1
+                        # Pourquoi ce film n'a-t-il aucun sous-titre ? (image,
+                        # langue, ou aucune piste) — pour vérification manuelle.
+                        why = list(meta.get("skipped", []))
+                        if not why:
+                            why = ["Aucune piste de sous-titre dans le fichier"]
+                        _subs_scan_state["no_subs_files"].append({
+                            "filename": filename,
+                            "title":    title,
+                            "reasons":  why,
+                        })
+        except Exception as e:
+            with _subs_scan_lock:
+                _subs_scan_state["failed"] += 1
+                _subs_scan_state["failures"].append({
+                    "filename": filename,
+                    "title":    title,
+                    "reasons":  [f"Erreur inattendue : {e}"],
+                })
+        finally:
+            with _subs_scan_lock:
+                _subs_scan_state["done"] += 1
+
+    with _subs_scan_lock:
+        _subs_scan_state["running"]     = False
+        _subs_scan_state["current"]     = None
+        _subs_scan_state["finished_at"] = time.time()
+
+    print(f"Extraction terminée : {_subs_scan_state['with_subs']} avec sous-titres, "
+          f"{_subs_scan_state['no_subs']} sans, {_subs_scan_state['failed']} en échec"
+          + (f", {_subs_scan_state['downloaded']} téléchargé(s)" if mode == "download" else ""))
+
+
+def start_subtitle_scan(mode: str = "new") -> bool:
+    """Démarre l'extraction en masse si elle n'est pas déjà en cours."""
+    global _subs_scan_thread
+    if mode not in ("new", "retry", "force", "download"):
+        mode = "new"
+    with _subs_scan_lock:
+        if _subs_scan_state["running"]:
+            return False
+        _subs_scan_state["running"] = True   # verrou immédiat (évite un double départ)
+    _subs_scan_thread = threading.Thread(
+        target=_run_subtitle_scan, kwargs={"mode": mode}, daemon=True
+    )
+    _subs_scan_thread.start()
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -879,6 +1634,101 @@ def api_tracks_refresh(movie_id):
     return jsonify(extract_tracks(movie))
 
 
+@app.route("/api/subtitles/scan", methods=["POST"])
+def api_subtitles_scan():
+    """
+    Lance l'extraction en masse des sous-titres de tout le dossier Films.
+    ?mode=new    : vérifie tout, saute les fichiers déjà complets (défaut).
+    ?mode=retry  : ne reprend que les échecs et les fichiers sans sous-titre.
+    ?mode=force  : purge tous les caches puis ré-extrait tout.
+    (?force=1 reste accepté comme alias de mode=force.)
+    """
+    mode = request.args.get("mode", "new")
+    if request.args.get("force", "0") in ("1", "true", "yes"):
+        mode = "force"
+    started = start_subtitle_scan(mode=mode)
+    return jsonify({
+        "status": "started" if started else "already_running",
+        **_public_scan_state(),
+    })
+
+
+@app.route("/api/subtitles/status")
+def api_subtitles_status():
+    """État courant de l'extraction en masse (pour la fenêtre de progression)."""
+    return jsonify(_public_scan_state())
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_get_settings():
+    """
+    Renvoie les paramètres pour préremplir le formulaire.
+    Le mot de passe n'est jamais renvoyé : on indique seulement s'il est défini.
+    """
+    with _settings_lock:
+        return jsonify({
+            "tmdb_api_key":            _settings["tmdb_api_key"],
+            "opensubtitles_api_key":   _settings["opensubtitles_api_key"],
+            "opensubtitles_username":  _settings["opensubtitles_username"],
+            "opensubtitles_langs":     ", ".join(_settings["opensubtitles_langs"] or []),
+            "opensubtitles_password_set": bool(_settings["opensubtitles_password"]),
+            "movies_dir":              _settings["movies_dir"],
+            "tracks_cache_dir":        _settings["tracks_cache_dir"],
+            "movies_dir_exists":       Path(_settings["movies_dir"]).expanduser().exists(),
+        })
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_save_settings():
+    """
+    Enregistre les paramètres (persistés dans SETTINGS_FILE).
+    Le mot de passe n'est mis à jour que si un nouveau est fourni (non vide).
+    Les langues sont acceptées en chaîne « fr, en » ou en liste.
+    """
+    global _movies_cache
+    body = request.get_json(silent=True) or {}
+    new = {}
+
+    for key in ("tmdb_api_key", "opensubtitles_api_key", "opensubtitles_username"):
+        if key in body:
+            new[key] = (body[key] or "").strip()
+
+    # Chemins : dossier des films et dossier de stockage des sous-titres.
+    for key in ("movies_dir", "tracks_cache_dir"):
+        if key in body and (body[key] or "").strip():
+            new[key] = body[key].strip()
+
+    # Langues : "fr, en" → ["fr", "en"]
+    if "opensubtitles_langs" in body:
+        raw = body["opensubtitles_langs"]
+        if isinstance(raw, list):
+            langs = [str(x).strip().lower() for x in raw if str(x).strip()]
+        else:
+            langs = [p.strip().lower() for p in re.split(r"[,\s]+", str(raw)) if p.strip()]
+        new["opensubtitles_langs"] = langs or ["fr", "en"]
+
+    # Mot de passe : seulement s'il est fourni non vide (sinon on garde l'ancien).
+    pwd = (body.get("opensubtitles_password") or "").strip()
+    if pwd:
+        new["opensubtitles_password"] = pwd
+
+    ok = save_settings(new)
+
+    # Si un chemin a changé : on rebinde les globals et on force un rescan de la
+    # bibliothèque au prochain /api/movies (nouveau dossier de films).
+    paths_changed = ok and any(k in new for k in ("movies_dir", "tracks_cache_dir"))
+    if paths_changed:
+        _apply_paths_from_settings()
+        with _movies_lock:
+            _movies_cache = None
+
+    return jsonify({
+        "status":            "ok" if ok else "error",
+        "paths_changed":     paths_changed,
+        "movies_dir_exists": MOVIES_DIR.exists(),
+    }), (200 if ok else 500)
+
+
 @app.route("/api/audio_status/<movie_id>/<int:idx>")
 def api_audio_status(movie_id, idx):
     movie = get_movie_by_id(movie_id)
@@ -1055,4 +1905,10 @@ if __name__ == "__main__":
     print("━" * 60)
 
     get_movies()
+
+    # Extraction anticipée des sous-titres de tout le dossier, en tâche de fond.
+    # Grâce aux id MD5 stables, les caches existants sont réutilisés après un
+    # redémarrage : seuls les fichiers nouveaux ou modifiés sont ré-extraits.
+    start_subtitle_scan()
+
     serve(app, host=HOST, port=PORT, threads=8)

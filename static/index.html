@@ -29,9 +29,11 @@
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button>
-        <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button>
+        <!-- <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button> -->
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
+      <button class="btn-refresh" id="subsScanBtn" onclick="openSubsModal()" title="Extraction des sous-titres">💬<span class="btn-label"> Sous-titres</span></button>
+      <button class="btn-refresh" id="settingsBtn" onclick="openSettingsModal()" title="Paramètres">⚙<span class="btn-label"> Paramètres</span></button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
       <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹<span class="btn-label"> Stop TV</span></button>
     </div>
@@ -69,6 +71,10 @@
           <div class="loading-step" id="stepVideo"></div>
           <div class="loading-step" id="stepTracks"></div>
         </div>
+      </div>
+      <div class="sub-selector" id="subSelector">
+        <div class="sub-selector-panel" id="subPanel"></div>
+        <button class="sub-selector-toggle" id="subToggle" onclick="toggleSubPanel()">CC</button>
       </div>
     </div>
   </div>
@@ -122,6 +128,152 @@
   <div class="cast-status-bar" id="castStatus">
     <div class="cast-dot"></div>
     <span id="castStatusText">Diffusion en cours sur la TV</span>
+  </div>
+
+  <!-- MODAL EXTRACTION DES SOUS-TITRES -->
+  <div id="subs-modal">
+    <div class="subs-container">
+      <div class="subs-header">
+        <div>
+          <div class="subs-title">💬 Extraction des sous-titres</div>
+          <div class="subs-sub" id="subsPhase">En attente…</div>
+        </div>
+        <button class="icon-btn" onclick="closeSubsModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="subs-body">
+        <div class="subs-progress-wrap">
+          <div class="subs-progress-bar"><div class="subs-progress-fill" id="subsBar"></div></div>
+          <div class="subs-progress-pct" id="subsPct">0%</div>
+        </div>
+
+        <div class="subs-current" id="subsCurrent"></div>
+
+        <div class="subs-stats">
+          <div class="subs-stat"><div class="subs-stat-num" id="subsStatDone">0</div><div class="subs-stat-label">Traités</div></div>
+          <div class="subs-stat"><div class="subs-stat-num" id="subsStatTotal">0</div><div class="subs-stat-label">Total</div></div>
+          <div class="subs-stat"><div class="subs-stat-num ok" id="subsStatWith">0</div><div class="subs-stat-label">Avec S-T</div></div>
+          <div class="subs-stat"><div class="subs-stat-num" id="subsStatNone">0</div><div class="subs-stat-label">Sans</div></div>
+          <div class="subs-stat"><div class="subs-stat-num err" id="subsStatFail">0</div><div class="subs-stat-label">Échecs</div></div>
+          <div class="subs-stat"><div class="subs-stat-num ok" id="subsStatDl">0</div><div class="subs-stat-label">Téléchargés</div></div>
+        </div>
+
+        <div class="subs-failures" id="subsFailures"></div>
+      </div>
+
+      <div class="subs-footer">
+        <button class="btn-cast-cancel" onclick="closeSubsModal()">Fermer</button>
+        <button class="btn-cast-launch" id="subsStartBtn" onclick="startSubsExtraction('new')">
+          <span>▶ Lancer l'extraction</span>
+        </button>
+        <button class="btn-cast-launch subs-force" id="subsRetryBtn" onclick="startSubsExtraction('retry')" title="Ne reprend que les échecs et les films sans sous-titre">
+          <span>↻ Réessayer échecs &amp; sans S-T</span>
+        </button>
+        <button class="btn-cast-launch subs-force" id="subsDlBtn" onclick="startSubsExtraction('download')" title="Télécharge un sous-titre français (OpenSubtitles) pour tout film qui n'en a pas — même s'il a déjà de l'anglais ou un externe">
+          <span>⬇ Télécharger le français manquant</span>
+        </button>
+        <button class="btn-cast-launch subs-force" id="subsForceBtn" onclick="startSubsExtraction('force')" title="Purge les caches et ré-extrait tout">
+          <span>↻ Tout ré-extraire</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL PARAMÈTRES -->
+  <div id="settings-modal">
+    <div class="subs-container">
+      <div class="subs-header">
+        <div>
+          <div class="subs-title">⚙ Paramètres</div>
+          <div class="subs-sub">Clés API — enregistrées sur le serveur</div>
+        </div>
+        <button class="icon-btn" onclick="closeSettingsModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="subs-body">
+        <div class="set-group">
+          <div class="set-group-title">📁 Chemins</div>
+          <label class="set-field">
+            <span class="set-label">Dossier des films</span>
+            <input type="text" id="setMoviesDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/home/pi/storage/6TO/Films">
+          </label>
+          <label class="set-field">
+            <span class="set-label">Dossier des sous-titres (cache)</span>
+            <input type="text" id="setTracksDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/home/pi/storage/6TO/.tracks_cache">
+          </label>
+          <div class="set-hint">Chemins absolus sur le serveur. Changer le dossier des films relance l'analyse de la bibliothèque.</div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">🎬 TMDB (affiches &amp; résumés)</div>
+          <label class="set-field">
+            <span class="set-label">Clé API TMDB</span>
+            <input type="text" id="setTmdbKey" class="set-input" autocomplete="off" spellcheck="false" placeholder="clé v3 TMDB">
+          </label>
+          <div class="set-hint">Compte gratuit sur themoviedb.org → Paramètres → API.</div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">💬 OpenSubtitles (téléchargement)</div>
+          <label class="set-field">
+            <span class="set-label">Clé API</span>
+            <input type="text" id="setOsKey" class="set-input" autocomplete="off" spellcheck="false" placeholder="clé « consumer »">
+          </label>
+          <label class="set-field">
+            <span class="set-label">Identifiant</span>
+            <input type="text" id="setOsUser" class="set-input" autocomplete="off" spellcheck="false" placeholder="nom d'utilisateur">
+          </label>
+          <label class="set-field">
+            <span class="set-label">Mot de passe</span>
+            <input type="password" id="setOsPass" class="set-input" autocomplete="new-password" placeholder="•••• (laisser vide pour ne pas changer)">
+          </label>
+          <label class="set-field">
+            <span class="set-label">Langues (ordre)</span>
+            <input type="text" id="setOsLangs" class="set-input" autocomplete="off" spellcheck="false" placeholder="fr, en">
+          </label>
+          <div class="set-hint">Compte gratuit sur opensubtitles.com, puis /consumers pour la clé API. Ordre = priorité (fr d'abord).</div>
+        </div>
+
+        <div class="set-status" id="setStatus"></div>
+      </div>
+
+      <div class="subs-footer">
+        <button class="btn-cast-cancel" onclick="closeSettingsModal()">Fermer</button>
+        <button class="btn-cast-launch" id="setSaveBtn" onclick="saveSettings()">
+          <span>💾 Enregistrer</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FICHE FILM (style Netflix) -->
+  <div id="movie-modal">
+    <div class="fiche-container" id="ficheContainer">
+      <div class="fiche-backdrop" id="ficheBackdrop"></div>
+      <div class="fiche-letter" id="ficheLetter"></div>
+      <div class="fiche-grad"></div>
+      <button class="icon-btn fiche-close" onclick="closeMovieModal()">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <div class="fiche-content">
+        <div class="fiche-tag">Film</div>
+        <div class="fiche-title" id="ficheTitle"></div>
+        <div class="fiche-meta" id="ficheMeta"></div>
+        <div class="fiche-overview" id="ficheOverview"></div>
+        <div class="fiche-subs" id="ficheSubs"></div>
+        <div class="fiche-buttons" id="ficheButtons"></div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

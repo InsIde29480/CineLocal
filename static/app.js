@@ -141,6 +141,7 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
       var statusText = '▶ ' + movie.title;
       if (subTrack) statusText += ' — ' + subTrack.label;
       document.getElementById('castStatusText').textContent = statusText;
+      markWatched(movie.id);
       console.log('[Cast] Lecture :', movie.title);
     })
     .catch(function (e) {
@@ -177,7 +178,7 @@ function openOptions(movie, target) {
   var titles = {
     pc:    ['🎞️ Choix de la qualité', '▶ Lire'],
     cast:  ['📺 Options Cast',         '📺 Lancer le Cast'],
-    local: ['📽️ Options TV directe',   '📽️ Lire sur la TV'],
+    // local: ['📽️ Options TV directe',   '📽️ Lire sur la TV'],
   };
   document.getElementById('optionsTitle').textContent   = titles[target][0];
   document.getElementById('btnLaunchLabel').textContent = titles[target][1];
@@ -483,6 +484,7 @@ function launchLocal() {
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.status === 'ok') {
+        markWatched(play.id);
         alert('▶ Lecture sur la TV : ' + data.playing);
       } else {
         alert('Erreur : ' + (data.message || 'lecture impossible'));
@@ -523,10 +525,22 @@ function attachSubtitleTracks(video, subtitleTracks) {
   }, 100);
 }
 
-// Active le sous-titre choisi dans la modale (sinon le menu natif reste dispo).
-function activateSubtitle(video, subtitleTracks, subTrack) {
-  if (!subTrack) return;
-  var idx = subtitleTracks.indexOf(subTrack);
+// Trouve l'index d'une piste à partir de l'objet exact ou d'une préférence
+// { language, label } mémorisée (correspondance entre variantes de qualité).
+function matchSubIndex(subtitleTracks, wanted) {
+  if (!wanted || !subtitleTracks || !subtitleTracks.length) return -1;
+  var idx = subtitleTracks.indexOf(wanted);
+  if (idx < 0 && wanted.label) {
+    idx = subtitleTracks.findIndex(function (s) { return s.label === wanted.label; });
+  }
+  if (idx < 0 && wanted.language && wanted.language !== 'und') {
+    idx = subtitleTracks.findIndex(function (s) { return s.language === wanted.language; });
+  }
+  return idx;
+}
+
+// Active la piste idx (ou rien si idx < 0)
+function activateSubtitle(video, idx) {
   if (idx < 0) return;
   setTimeout(function () {
     for (var i = 0; i < video.textTracks.length; i++) {
@@ -535,11 +549,74 @@ function activateSubtitle(video, subtitleTracks, subTrack) {
   }, 160);   // après le 'disabled' global d'attachSubtitleTracks (100 ms)
 }
 
+// ─── BOUTON CC DU LECTEUR ────────────────────────────────────────────
+// Bouton « CC » toujours affiché dès qu'au moins un sous-titre existe,
+// indépendamment du menu natif du navigateur. Ouvre un panneau de choix.
+var _playerSubTracks = [];
+
+function setupSubSelector(video, subtitleTracks, activeIdx) {
+  var sel   = document.getElementById('subSelector');
+  var panel = document.getElementById('subPanel');
+  sel.classList.remove('open');
+  _playerSubTracks = subtitleTracks || [];
+
+  if (!_playerSubTracks.length) {
+    sel.classList.remove('visible');
+    panel.innerHTML = '';
+    return;
+  }
+
+  sel.classList.add('visible');
+  var html = '<div class="sub-panel-label">💬 Sous-titres</div>';
+  html += '<button class="sub-option" data-sub="-1" onclick="selectPlayerSub(-1)">Aucun</button>';
+  _playerSubTracks.forEach(function (s, i) {
+    html += '<button class="sub-option" data-sub="' + i + '" onclick="selectPlayerSub(' + i + ')">'
+      + escHtml(s.label) + '</button>';
+  });
+  panel.innerHTML = html;
+  refreshSubUI(activeIdx);
+
+  // Reste synchronisé si l'utilisateur change via le menu natif du lecteur
+  video.textTracks.onchange = function () {
+    var showing = -1;
+    for (var i = 0; i < video.textTracks.length; i++) {
+      if (video.textTracks[i].mode === 'showing') showing = i;
+    }
+    refreshSubUI(showing);
+  };
+}
+
+function refreshSubUI(activeIdx) {
+  document.querySelectorAll('#subPanel .sub-option').forEach(function (btn) {
+    btn.classList.toggle('active', parseInt(btn.dataset.sub, 10) === activeIdx);
+  });
+  document.getElementById('subToggle').classList.toggle('active', activeIdx >= 0);
+}
+
+function toggleSubPanel() {
+  document.getElementById('subSelector').classList.toggle('open');
+}
+
+function selectPlayerSub(i) {
+  var video = document.getElementById('player-video');
+  for (var k = 0; k < video.textTracks.length; k++) {
+    video.textTracks[k].mode = (k === i) ? 'showing' : 'disabled';
+  }
+  // Devient la préférence globale mémorisée
+  setSubPref(i >= 0 && _playerSubTracks[i] ? _playerSubTracks[i] : null);
+  refreshSubUI(i);
+  document.getElementById('subSelector').classList.remove('open');
+}
+
 // Lecture navigateur. `movie.id` est l'id de la variante de qualité choisie.
 // audioIdx 0 = piste par défaut (fichier brut, instantané) ; sinon remux cache.
-// subTrack = sous-titre à activer au démarrage (ou null).
+// subTrack = sous-titre à activer au démarrage (ou null → préférence globale).
 function playPc(movie, audioIdx, subTrack) {
   currentMovie = movie;
+  markWatched(movie.id);
+  // Pas de sous-titre explicite : on applique la préférence globale mémorisée
+  // (choisie dans la fiche film). null / « Aucun » = rien d'activé.
+  if (!subTrack) subTrack = getSubPref();
   var video   = document.getElementById('player-video');
   var modal   = document.getElementById('player-modal');
   var loading = document.getElementById('playerLoading');
@@ -590,7 +667,9 @@ function playPc(movie, audioIdx, subTrack) {
         var tracks = results[1];
         if (!currentMovie || currentMovie.id !== movieId) return;
         attachSubtitleTracks(video, tracks.subtitle_tracks);
-        activateSubtitle(video, tracks.subtitle_tracks, subTrack);
+        var activeIdx = matchSubIndex(tracks.subtitle_tracks, subTrack);
+        activateSubtitle(video, activeIdx);
+        setupSubSelector(video, tracks.subtitle_tracks, activeIdx);
         setLoadingState('Prêt !', 'Démarrage…', true, true);
         setTimeout(function () {
           loading.classList.add('hidden');
@@ -638,7 +717,13 @@ function closePlayer() {
   video.pause();
   video.src = '';
   video.querySelectorAll('track').forEach(function (t) { t.remove(); });
+  video.textTracks.onchange = null;
   currentMovie = null;   // stoppe un éventuel polling de préparation audio
+  _playerSubTracks = [];
+  var sel = document.getElementById('subSelector');
+  sel.classList.remove('visible');
+  sel.classList.remove('open');
+  document.getElementById('subPanel').innerHTML = '';
   document.getElementById('player-modal').classList.remove('open');
   document.getElementById('playerLoading').classList.remove('hidden');
   document.body.style.overflow = '';
@@ -647,22 +732,207 @@ function closePlayer() {
 // ═══════════════════════════════════════════════════════════════════
 // ACTIONS
 // ═══════════════════════════════════════════════════════════════════
-function playMovie(id) {
-  var m = allMovies.find(function (x) { return x.id === id; });
-  if (!m) return;
-  if (currentMode === 'local')   openOptions(m, 'local');
-  else if (currentMode === 'tv') openOptions(m, 'cast');
-  else {
-    // PC : popup uniquement s'il existe plusieurs qualités (ex. 4K + HD),
-    // juste pour choisir la qualité. Sinon lecture directe (audio et
-    // sous-titres gérés par le lecteur du navigateur).
-    if (m.qualities && m.qualities.length > 1) openOptions(m, 'pc');
-    else                                       playPc(m, 0, null);
-  }
+// ═══════════════════════════════════════════════════════════════════
+// SUIVI DES ÉPISODES VUS (stocké dans le navigateur, ids stables)
+// ═══════════════════════════════════════════════════════════════════
+function getWatchedMap() {
+  try { return JSON.parse(localStorage.getItem('cinelocal-watched') || '{}'); }
+  catch (e) { return {}; }
 }
 
-function openMovie(id) {
-  playMovie(id);
+function isWatched(id) {
+  return !!getWatchedMap()[id];
+}
+
+function markWatched(id) {
+  var map = getWatchedMap();
+  if (map[id]) return;
+  map[id] = true;
+  localStorage.setItem('cinelocal-watched', JSON.stringify(map));
+}
+
+function toggleWatched(id) {
+  var map = getWatchedMap();
+  if (map[id]) delete map[id];
+  else         map[id] = true;
+  localStorage.setItem('cinelocal-watched', JSON.stringify(map));
+  renderEpisodes();
+  updateSeriesMeta();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FICHE FILM (style Netflix, données TMDB)
+// ═══════════════════════════════════════════════════════════════════
+var currentFiche     = null;
+var ficheSubTracks   = [];      // pistes de sous-titres du film affiché
+var ficheSelectedSub = null;    // index dans ficheSubTracks, ou null = aucun
+var ficheToken       = 0;       // anti-course sur le chargement des pistes
+
+// ─── Préférence GLOBALE de sous-titres (mémorisée, appliquée partout en PC) ──
+function getSubPref() {
+  try { return JSON.parse(localStorage.getItem('cinelocal-sub-pref') || 'null'); }
+  catch (e) { return null; }
+}
+
+function setSubPref(track) {
+  localStorage.setItem('cinelocal-sub-pref',
+    JSON.stringify(track ? { language: track.language, label: track.label } : null));
+}
+
+function fmtSize(mb) {
+  if (!mb) return '';
+  return mb >= 1024 ? (Math.round(mb / 102.4) / 10 + ' Go') : (mb + ' Mo');
+}
+
+function openMovieDetails(id) {
+  var m = allMovies.find(function (x) { return x.id === id && x.kind === 'movie'; });
+  if (!m) return;
+  currentFiche = m;
+  ficheToken++;
+
+  document.getElementById('ficheTitle').textContent = m.title;
+
+  var best = (m.qualities && m.qualities[0]) || null;
+  var has4k = !!(m.qualities || []).some(function (q) { return (q.height || 0) >= 2160; });
+  var metaParts = [
+    m.year,
+    m.category !== 'Films' ? m.category : '',
+    fmtSize(best ? best.size_mb : m.size_mb),
+    has4k ? '4K' : (best && best.label) || '',
+  ].filter(Boolean);
+  document.getElementById('ficheMeta').textContent = metaParts.join(' · ');
+
+  var ov = document.getElementById('ficheOverview');
+  ov.textContent = m.overview || '';
+  ov.style.display = m.overview ? '' : 'none';
+
+  // Image de fond : backdrop TMDB, sinon grande initiale en filigrane
+  var container = document.getElementById('ficheContainer');
+  var backdrop  = document.getElementById('ficheBackdrop');
+  var letter    = document.getElementById('ficheLetter');
+  var bg = m.backdrop || m.poster;
+  if (bg) {
+    container.classList.remove('no-image');
+    backdrop.style.backgroundImage = 'url(' + bg + ')';
+    letter.textContent = '';
+  } else {
+    container.classList.add('no-image');
+    backdrop.style.backgroundImage = '';
+    letter.textContent = (m.title || '?').charAt(0).toUpperCase();
+  }
+
+  // Boutons : un bouton lecture par qualité (4K / HD), + Chromecast + TV directe
+  var qs = (m.qualities && m.qualities.length)
+    ? m.qualities
+    : [{ id: m.id, label: '', ext: m.ext, size_mb: m.size_mb }];
+  var btns = '';
+  if (qs.length > 1) {
+    qs.forEach(function (q, i) {
+      btns += '<button class="btn-fiche ' + (i === 0 ? 'primary' : 'ghost') + '" onclick="fichePlay(' + i + ')">'
+        + '▶ Lire ' + escHtml(q.label || '') + '</button>';
+    });
+  } else {
+    btns += '<button class="btn-fiche primary" onclick="fichePlay(0)">▶ Lire</button>';
+  }
+  btns += '<button class="btn-fiche ghost" onclick="ficheCast()">📺 Chromecast</button>';
+  // btns += '<button class="btn-fiche ghost" onclick="ficheLocal()">📽️ TV directe</button>';
+  document.getElementById('ficheButtons').innerHTML = btns;
+
+  // Sous-titres : pré-chargement (extraction VTT côté serveur) + choix global.
+  // Chargés depuis la meilleure qualité ; la correspondance langue/libellé est
+  // faite au lancement si une autre variante est lue.
+  ficheSubTracks   = [];
+  ficheSelectedSub = null;
+  var subsEl = document.getElementById('ficheSubs');
+  subsEl.style.display = '';
+  subsEl.innerHTML = '<span class="fiche-subs-label">💬 Sous-titres</span>'
+    + '<span class="fiche-subs-loading">chargement…</span>';
+
+  var myToken = ficheToken;
+  fetch('/api/tracks/' + qs[0].id)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (ficheToken !== myToken) return;   // autre fiche ouverte entre-temps
+      ficheSubTracks = data.subtitle_tracks || [];
+      // Pré-sélectionne la préférence globale mémorisée si elle correspond
+      var pref = getSubPref();
+      if (pref) {
+        var i = ficheSubTracks.findIndex(function (s) { return s.label === pref.label; });
+        if (i < 0 && pref.language && pref.language !== 'und') {
+          i = ficheSubTracks.findIndex(function (s) { return s.language === pref.language; });
+        }
+        ficheSelectedSub = (i >= 0) ? i : null;
+      }
+      renderFicheSubs();
+    })
+    .catch(function () {
+      if (ficheToken !== myToken) return;
+      ficheSubTracks = [];
+      renderFicheSubs();
+    });
+
+  document.getElementById('movie-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function renderFicheSubs() {
+  var el = document.getElementById('ficheSubs');
+  if (!ficheSubTracks.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  var html = '<span class="fiche-subs-label">💬 Sous-titres</span>';
+  html += '<button class="sub-chip' + (ficheSelectedSub === null ? ' active' : '')
+    + '" onclick="selectFicheSub(null)">Aucun</button>';
+  ficheSubTracks.forEach(function (s, i) {
+    html += '<button class="sub-chip' + (ficheSelectedSub === i ? ' active' : '')
+      + '" onclick="selectFicheSub(' + i + ')">' + escHtml(s.label) + '</button>';
+  });
+  el.innerHTML = html;
+}
+
+function selectFicheSub(i) {
+  ficheSelectedSub = i;
+  // Devient la préférence globale : appliquée aussi aux prochains films/épisodes
+  setSubPref(i === null ? null : ficheSubTracks[i]);
+  renderFicheSubs();
+}
+
+function closeMovieModal() {
+  ficheToken++;   // stoppe un éventuel chargement de pistes en cours
+  document.getElementById('movie-modal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+// Lecture navigateur de la qualité choisie. Le sous-titre sélectionné dans la
+// fiche est activé au démarrage ; l'audio reste géré par le lecteur natif.
+function fichePlay(qIdx) {
+  if (!currentFiche) return;
+  var m  = currentFiche;
+  var qs = (m.qualities && m.qualities.length)
+    ? m.qualities
+    : [{ id: m.id, ext: m.ext }];
+  var q  = qs[qIdx] || qs[0];
+  var play = Object.assign({}, m, { id: q.id, ext: q.ext || m.ext });
+  var subTrack = (ficheSelectedSub !== null) ? ficheSubTracks[ficheSelectedSub] : null;
+  closeMovieModal();
+  playPc(play, 0, subTrack);
+}
+
+function ficheCast() {
+  if (!currentFiche) return;
+  var m = currentFiche;
+  closeMovieModal();
+  openOptions(m, 'cast');
+}
+
+function ficheLocal() {
+  if (!currentFiche) return;
+  var m = currentFiche;
+  closeMovieModal();
+  openOptions(m, 'local');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -673,9 +943,7 @@ function openSeries(seriesId) {
   if (!series) return;
   currentSeries = series;
   document.getElementById('seriesModalTitle').textContent = series.title;
-  document.getElementById('seriesModalMeta').textContent  =
-    series.season_count + ' saison' + (series.season_count > 1 ? 's' : '') +
-    ' · ' + series.episode_count + ' épisodes';
+  updateSeriesMeta();
   document.getElementById('seriesModalOverview').textContent = series.overview || '';
 
   var headerBg = series.backdrop || series.poster;
@@ -701,16 +969,36 @@ function selectSeason(season) {
   renderEpisodes();
 }
 
+function updateSeriesMeta() {
+  if (!currentSeries) return;
+  var watchedCount = currentSeries.episodes.filter(function (e) { return isWatched(e.id); }).length;
+  document.getElementById('seriesModalMeta').textContent =
+    currentSeries.season_count + ' saison' + (currentSeries.season_count > 1 ? 's' : '') +
+    ' · ' + currentSeries.episode_count + ' épisodes' +
+    ' · ' + watchedCount + '/' + currentSeries.episode_count + ' vus';
+}
+
 function renderEpisodes() {
   if (!currentSeries) return;
   var eps      = currentSeries.episodes.filter(function (e) { return e.season === currentSeason; });
   var btnLabel = currentMode === 'tv' ? '📺 Caster' : currentMode === 'local' ? '📽️ TV' : '▶ Lire';
+
+  // Prochain épisode à voir : premier non vu de toute la série
+  // (les épisodes sont déjà triés saison/épisode côté serveur).
+  var nextEp = currentSeries.episodes.find(function (e) { return !isWatched(e.id); });
+  var nextId = nextEp ? nextEp.id : null;
+
   document.getElementById('episodesList').innerHTML = eps.map(function (ep) {
-    return '<div class="episode-row" onclick="playEpisode(\'' + ep.id + '\')">'
+    var watched = isWatched(ep.id);
+    var nextTag = (ep.id === nextId) ? '<span class="ep-next-tag">À suivre</span>' : '';
+    return '<div class="episode-row' + (watched ? ' watched' : '') + '" onclick="playEpisode(\'' + ep.id + '\')">'
+      + '<button class="ep-check' + (watched ? ' watched' : '') + '" title="' + (watched ? 'Marquer non vu' : 'Marquer vu') + '"'
+      + ' onclick="event.stopPropagation();toggleWatched(\'' + ep.id + '\')">✓</button>'
       + '<div class="episode-num">E' + String(ep.episode).padStart(2, '0') + '</div>'
       + '<div class="episode-info">'
-      + '<div class="episode-title">Épisode ' + ep.episode + '</div>'
-      + '<div class="episode-meta">' + ep.size_mb + ' Mo · ' + ep.ext.replace('.', '').toUpperCase() + '</div>'
+      + '<div class="episode-title">Épisode ' + ep.episode + nextTag + '</div>'
+      + '<div class="episode-meta">' + ep.size_mb + ' Mo · ' + ep.ext.replace('.', '').toUpperCase()
+      + (watched ? ' · <span class="ep-seen">✓ vu</span>' : '') + '</div>'
       + '</div>'
       + '<button class="episode-play" onclick="event.stopPropagation();playEpisode(\'' + ep.id + '\')">' + btnLabel + '</button>'
       + '</div>';
@@ -789,17 +1077,15 @@ function renderMovies(movies) {
 }
 
 function movieCard(m) {
-  var ext      = m.ext.replace('.', '').toUpperCase();
   var isSeries = m.kind === 'series';
-  var btnLabel = currentMode === 'tv' ? '📺 Caster' : currentMode === 'local' ? '📽️ TV' : '▶ Lire';
   var meta     = isSeries
     ? (m.season_count + ' saison' + (m.season_count > 1 ? 's' : '') + ' · ' + m.episode_count + ' ép.')
     : ((m.year || '') + ' · ' + m.size_mb + ' Mo');
   var action   = isSeries
     ? ("event.stopPropagation();openSeries('" + m.id + "')")
-    : ("event.stopPropagation();playMovie('" + m.id + "')");
-  var cardClick   = isSeries ? ("openSeries('" + m.id + "')") : ("openMovie('" + m.id + "')");
-  var actionLabel = isSeries ? '📂 Voir épisodes' : btnLabel;
+    : ("event.stopPropagation();openMovieDetails('" + m.id + "')");
+  var cardClick   = isSeries ? ("openSeries('" + m.id + "')") : ("openMovieDetails('" + m.id + "')");
+  var actionLabel = isSeries ? '📂 Voir épisodes' : 'ℹ Détails';
   var poster = m.poster
     ? ('<img class="card-thumb" src="' + m.poster + '" alt="' + escHtml(m.title) + '" loading="lazy"'
        + ' onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" />')
@@ -814,7 +1100,6 @@ function movieCard(m) {
     + poster
     + '<div class="card-placeholder" style="display:' + (m.poster ? 'none' : 'flex') + '">'
     + (isSeries ? '📺' : '🎬') + '<span>' + escHtml(m.title.substring(0, 30)) + '</span></div>'
-    + '<div class="card-badge">' + ext + '</div>'
     + qualityBadge
     + (isSeries ? '<div class="series-badge">SÉRIE</div>' : '')
     + '<div class="card-info">'
@@ -886,6 +1171,262 @@ function nextHeroSlide() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// EXTRACTION EN MASSE DES SOUS-TITRES (fenêtre de progression)
+// ═══════════════════════════════════════════════════════════════════
+var _subsPollTimer = null;
+var _lastSubsState = null;
+// État ouvert/fermé des menus déroulants (conservé entre deux rafraîchissements)
+var _subsDropOpen  = { nosubs: false, fails: true };
+
+function openSubsModal() {
+  document.getElementById('subs-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  // Affiche l'état courant tout de suite, puis rafraîchit en continu.
+  fetchSubsStatus();
+  startSubsPolling();
+}
+
+function closeSubsModal() {
+  stopSubsPolling();
+  document.getElementById('subs-modal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function startSubsPolling() {
+  if (_subsPollTimer) return;
+  _subsPollTimer = setInterval(fetchSubsStatus, 1000);
+}
+
+function stopSubsPolling() {
+  if (_subsPollTimer) { clearInterval(_subsPollTimer); _subsPollTimer = null; }
+}
+
+function fetchSubsStatus() {
+  fetch('/api/subtitles/status')
+    .then(function (r) { return r.json(); })
+    .then(function (state) {
+      renderSubsState(state);
+      // Plus rien à surveiller une fois l'extraction terminée : on arrête le
+      // rafraîchissement mais on garde le dernier état affiché.
+      if (!state.running) stopSubsPolling();
+    })
+    .catch(function () {
+      document.getElementById('subsPhase').textContent = 'Serveur injoignable';
+    });
+}
+
+// Lance (ou relance) l'extraction côté serveur.
+//   'new'   → vérifie tout, saute ce qui est déjà complet
+//   'retry' → ne reprend que les échecs et les films sans sous-titre
+//   'force' → purge tous les caches puis tout ré-extrait
+function startSubsExtraction(mode) {
+  mode = mode || 'new';
+  if (mode === 'force' && !confirm('Purger TOUS les caches de sous-titres et tout ré-extraire ?\nCela peut être long sur un disque dur.')) return;
+  _setSubsButtonsDisabled(true);
+  fetch('/api/subtitles/scan?mode=' + mode, { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (state) {
+      renderSubsState(state);
+      startSubsPolling();
+    })
+    .catch(function () {
+      document.getElementById('subsPhase').textContent = 'Impossible de lancer l’extraction';
+      _setSubsButtonsDisabled(false);
+    });
+}
+
+function _setSubsButtonsDisabled(disabled) {
+  ['subsStartBtn', 'subsRetryBtn', 'subsForceBtn', 'subsDlBtn'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
+}
+
+function renderSubsState(s) {
+  _lastSubsState = s;
+  var total   = s.total || 0;
+  var done    = s.done || 0;
+  var pct     = total ? Math.round((done / total) * 100) : (s.running ? 0 : 0);
+
+  document.getElementById('subsBar').style.width  = pct + '%';
+  document.getElementById('subsPct').textContent  = pct + '%';
+  document.getElementById('subsStatDone').textContent  = done;
+  document.getElementById('subsStatTotal').textContent = total;
+  document.getElementById('subsStatWith').textContent  = s.with_subs || 0;
+  document.getElementById('subsStatNone').textContent  = s.no_subs || 0;
+  document.getElementById('subsStatFail').textContent  = s.failed || 0;
+  document.getElementById('subsStatDl').textContent    = s.downloaded || 0;
+
+  // Phase / message d'état
+  var phase = document.getElementById('subsPhase');
+  if (s.running) {
+    phase.textContent = 'Extraction en cours… (' + done + '/' + total + ')';
+  } else if (s.finished_at) {
+    var msg = 'Terminé — ' + (s.with_subs || 0) + ' avec sous-titres, '
+      + (s.failed || 0) + ' échec' + ((s.failed || 0) > 1 ? 's' : '');
+    if (s.downloaded) msg += ', ' + s.downloaded + ' téléchargé' + (s.downloaded > 1 ? 's' : '');
+    phase.textContent = msg;
+  } else {
+    phase.textContent = 'Aucune extraction lancée pour l’instant';
+  }
+
+  // Fichier en cours
+  document.getElementById('subsCurrent').textContent = s.running && s.current ? s.current : '';
+
+  // Boutons
+  _setSubsButtonsDisabled(!!s.running);
+
+  // Menus déroulants : films sans sous-titre + échecs (avec la raison)
+  renderSubsDropdowns(s);
+}
+
+// Bascule un menu déroulant ouvert/fermé (état conservé au rafraîchissement)
+function toggleSubsDrop(which) {
+  _subsDropOpen[which] = !_subsDropOpen[which];
+  renderSubsDropdowns(_lastSubsState);
+}
+
+function renderSubsDropdowns(s) {
+  var el = document.getElementById('subsFailures');
+  if (!s) { el.innerHTML = ''; return; }
+
+  var noSubs = s.no_subs_files || [];
+  var fails  = s.failures || [];
+
+  var noSubsLabel = (s.mode === 'download')
+    ? '💬 Films sans sous-titre français'
+    : '💬 Films sans sous-titre';
+
+  var html = '';
+  html += _subsDropSection('nosubs', noSubsLabel, noSubs, true);
+  html += _subsDropSection('fails',  '⚠ Échecs',   fails,  true);
+
+  // Rien à signaler une fois l'extraction terminée
+  if (!noSubs.length && !fails.length) {
+    html = (!s.running && s.finished_at)
+      ? '<div class="subs-empty-msg">✓ ' + (s.mode === 'download'
+          ? 'Tous les films analysés ont un sous-titre français.'
+          : 'Tous les films analysés ont au moins un sous-titre.') + '</div>'
+      : '';
+  }
+  el.innerHTML = html;
+}
+
+// Construit une section repliable. `withReasons` = afficher la raison d'échec.
+function _subsDropSection(key, label, items, withReasons) {
+  if (!items.length) return '';
+  var open   = !!_subsDropOpen[key];
+  var caret  = open ? '▾' : '▸';
+  var rows   = items.map(function (it) {
+    var reasons = withReasons
+      ? (it.reasons || []).map(function (r) { return escHtml(r); }).join('<br>')
+      : '';
+    return '<div class="subs-fail-row">'
+      + '<div class="subs-fail-name">' + escHtml(it.filename || it.title || '?') + '</div>'
+      + (reasons ? '<div class="subs-fail-reason">' + reasons + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  return '<div class="subs-drop ' + (withReasons ? 'err' : '') + '">'
+    + '<button class="subs-drop-head" onclick="toggleSubsDrop(\'' + key + '\')">'
+    +   '<span class="subs-drop-caret">' + caret + '</span>'
+    +   '<span class="subs-drop-label">' + label + '</span>'
+    +   '<span class="subs-drop-count">' + items.length + '</span>'
+    + '</button>'
+    + '<div class="subs-drop-body" style="display:' + (open ? 'flex' : 'none') + '">'
+    +   rows
+    + '</div>'
+    + '</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PARAMÈTRES (clés API TMDB / OpenSubtitles)
+// ═══════════════════════════════════════════════════════════════════
+function openSettingsModal() {
+  document.getElementById('settings-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  document.getElementById('setStatus').textContent = '';
+  fetch('/api/settings')
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      document.getElementById('setMoviesDir').value = s.movies_dir || '';
+      document.getElementById('setTracksDir').value = s.tracks_cache_dir || '';
+      document.getElementById('setTmdbKey').value = s.tmdb_api_key || '';
+      document.getElementById('setOsKey').value   = s.opensubtitles_api_key || '';
+      document.getElementById('setOsUser').value  = s.opensubtitles_username || '';
+      document.getElementById('setOsLangs').value = s.opensubtitles_langs || 'fr, en';
+      var pass = document.getElementById('setOsPass');
+      pass.value = '';
+      pass.placeholder = s.opensubtitles_password_set
+        ? '•••• (enregistré — laisser vide pour garder)'
+        : 'mot de passe';
+      if (s.movies_dir_exists === false) {
+        var st = document.getElementById('setStatus');
+        st.className = 'set-status err';
+        st.textContent = '⚠ Le dossier des films actuel est introuvable sur le serveur.';
+      }
+    })
+    .catch(function () {
+      document.getElementById('setStatus').textContent = 'Impossible de charger les paramètres.';
+    });
+}
+
+function closeSettingsModal() {
+  document.getElementById('settings-modal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function saveSettings() {
+  var btn = document.getElementById('setSaveBtn');
+  var status = document.getElementById('setStatus');
+  btn.disabled = true;
+  status.className = 'set-status';
+  status.textContent = 'Enregistrement…';
+
+  var payload = {
+    movies_dir:             document.getElementById('setMoviesDir').value,
+    tracks_cache_dir:       document.getElementById('setTracksDir').value,
+    tmdb_api_key:           document.getElementById('setTmdbKey').value,
+    opensubtitles_api_key:  document.getElementById('setOsKey').value,
+    opensubtitles_username: document.getElementById('setOsUser').value,
+    opensubtitles_langs:    document.getElementById('setOsLangs').value,
+    opensubtitles_password: document.getElementById('setOsPass').value,
+  };
+
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      btn.disabled = false;
+      if (res.status === 'ok') {
+        document.getElementById('setOsPass').value = '';
+        if (res.paths_changed && res.movies_dir_exists === false) {
+          status.className = 'set-status err';
+          status.textContent = '✓ Enregistré, mais le dossier des films est introuvable.';
+        } else {
+          status.className = 'set-status ok';
+          status.textContent = res.paths_changed
+            ? '✓ Enregistré — bibliothèque en cours de rechargement…'
+            : '✓ Paramètres enregistrés.';
+        }
+        // Un changement de chemin relance le scan : on recharge le catalogue.
+        if (res.paths_changed) loadMovies();
+      } else {
+        status.className = 'set-status err';
+        status.textContent = '✗ Échec de l’enregistrement (voir les logs serveur).';
+      }
+    })
+    .catch(function () {
+      btn.disabled = false;
+      status.className = 'set-status err';
+      status.textContent = '✗ Serveur injoignable.';
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // UTILITAIRE
 // ═══════════════════════════════════════════════════════════════════
 function escHtml(s) {
@@ -908,8 +1449,14 @@ document.getElementById('series-modal').addEventListener('click', function (e) {
 document.getElementById('cast-options-modal').addEventListener('click', function (e) {
   if (e.target === document.getElementById('cast-options-modal')) closeCastOptions();
 });
+document.getElementById('subs-modal').addEventListener('click', function (e) {
+  if (e.target === document.getElementById('subs-modal')) closeSubsModal();
+});
+document.getElementById('settings-modal').addEventListener('click', function (e) {
+  if (e.target === document.getElementById('settings-modal')) closeSettingsModal();
+});
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); }
+  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); closeMovieModal(); closeSubsModal(); closeSettingsModal(); }
 });
 
 setMode(currentMode);
