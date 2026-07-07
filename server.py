@@ -445,6 +445,83 @@ def _run_ffmpeg_subs(cmd: list, vtt_path: Path, idle_timeout: int, label: str):
     return True, None
 
 
+# ─── ENCODAGE DES SOUS-TITRES ────────────────────────────────────────────────
+# Beaucoup de .srt (surtout français) sont en Windows-1252 / Latin-1 : lus comme
+# de l'UTF-8, les accents deviennent illisibles (« Ã© », « � »). On détecte donc
+# l'encodage réel et on normalise tout en UTF-8 avant de produire le VTT.
+
+def _decode_subtitle_bytes(raw: bytes) -> str:
+    """Décode des octets de sous-titre en texte, en devinant l'encodage."""
+    # 1) UTF-8 (avec ou sans BOM) en priorité
+    for enc in ("utf-8-sig", "utf-8"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    # 2) Détection automatique (charset_normalizer est fourni avec requests)
+    try:
+        from charset_normalizer import from_bytes
+        best = from_bytes(raw).best()
+        if best is not None:
+            return str(best)
+    except Exception:
+        pass
+    try:
+        import chardet
+        enc = (chardet.detect(raw) or {}).get("encoding")
+        if enc:
+            return raw.decode(enc, errors="replace")
+    except Exception:
+        pass
+    # 3) Replis classiques : Windows-1252 puis Latin-1 (ce dernier ne lève jamais)
+    for enc in ("cp1252", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def _external_sub_to_vtt(src: Path, vtt_path: Path):
+    """
+    Convertit un sous-titre externe (.srt/.vtt) en VTT UTF-8. Renvoie (ok, reason).
+    Le fichier source est d'abord normalisé en UTF-8 pour éviter tout mojibake.
+    """
+    ext = src.suffix.lower()
+    try:
+        text = _decode_subtitle_bytes(src.read_bytes())
+    except Exception as e:
+        return False, f"lecture impossible : {e}"
+
+    if ext == ".vtt":
+        # Déjà du VTT : on le réécrit simplement en UTF-8 propre.
+        try:
+            vtt_path.write_text(text, encoding="utf-8")
+        except Exception as e:
+            _safe_remove(vtt_path)
+            return False, f"écriture impossible : {e}"
+        if vtt_path.exists() and vtt_path.stat().st_size > 0:
+            return True, None
+        _safe_remove(vtt_path)
+        return False, "fichier VTT vide/illisible"
+
+    # .srt (ou autre format texte) : on écrit une copie UTF-8 puis ffmpeg → webvtt.
+    tmp = vtt_path.parent / (vtt_path.stem + ".src.utf8.srt")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+    except Exception as e:
+        _safe_remove(tmp)
+        return False, f"normalisation impossible : {e}"
+    ok, reason = _run_ffmpeg_subs(
+        ["ffmpeg", "-y", "-sub_charenc", "UTF-8", "-i", str(tmp),
+         "-c:s", "webvtt", str(vtt_path)],
+        vtt_path, SUBS_TIMEOUT_EXTERNAL,
+        f"sous-titres externes {src.name}",
+    )
+    _safe_remove(tmp)
+    return ok, reason
+
+
 def extract_tracks(movie: dict, force: bool = False) -> dict:
     """
     Extrait les sous-titres en VTT + liste les pistes audio (métadonnées).
@@ -597,25 +674,11 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
                     lang = "und"
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
-                ok = False
-                reason = "erreur inconnue"
                 try:
-                    if ext == '.vtt':
-                        shutil.copy(sub_file, vtt_path)
-                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
-                        if not ok:
-                            reason = "fichier VTT vide/illisible"
-                    else:
-                        ok, reason = _run_ffmpeg_subs(
-                            ["ffmpeg", "-y", "-i", str(sub_file),
-                             "-c:s", "webvtt", str(vtt_path)],
-                            vtt_path,
-                            SUBS_TIMEOUT_EXTERNAL,
-                            f"sous-titres externes {sub_file.name}",
-                        )
+                    ok, reason = _external_sub_to_vtt(sub_file, vtt_path)
                 except Exception as e:
                     _safe_remove(vtt_path)
-                    reason = str(e)
+                    ok, reason = False, str(e)
                     print(f"Échec sous-titres externes {sub_file.name} : {e}")
                 if ok:
                     subtitle_tracks.append({
@@ -634,25 +697,11 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
             if simple_sub.exists():
                 external_idx = 1000 + subs_idx
                 vtt_path = cache_dir / f"subs_{external_idx}.vtt"
-                ok = False
-                reason = "erreur inconnue"
                 try:
-                    if ext == '.vtt':
-                        shutil.copy(simple_sub, vtt_path)
-                        ok = vtt_path.exists() and vtt_path.stat().st_size > 0
-                        if not ok:
-                            reason = "fichier VTT vide/illisible"
-                    else:
-                        ok, reason = _run_ffmpeg_subs(
-                            ["ffmpeg", "-y", "-i", str(simple_sub),
-                             "-c:s", "webvtt", str(vtt_path)],
-                            vtt_path,
-                            SUBS_TIMEOUT_EXTERNAL,
-                            f"sous-titres externes {simple_sub.name}",
-                        )
+                    ok, reason = _external_sub_to_vtt(simple_sub, vtt_path)
                 except Exception as e:
                     _safe_remove(vtt_path)
-                    reason = str(e)
+                    ok, reason = False, str(e)
                     print(f"Échec sous-titres externes {simple_sub.name} : {e}")
                 if ok:
                     subtitle_tracks.append({
@@ -829,7 +878,9 @@ def _os_download_content(file_id) -> tuple:
         dl = requests.get(link, timeout=30)
         if dl.status_code != 200 or not dl.content:
             return None, f"contenu injoignable (HTTP {dl.status_code})"
-        return dl.content.decode("utf-8", errors="replace"), None
+        # Détecte l'encodage réel (souvent Windows-1252 pour le français) et
+        # normalise en UTF-8, sinon les accents ressortent en mojibake.
+        return _decode_subtitle_bytes(dl.content), None
     except Exception as e:
         return None, f"téléchargement injoignable : {e}"
 
