@@ -34,7 +34,7 @@ SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
 PORT             = 8765
 
-TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
+TMDB_API_KEY     = ""
 
 # ─── OpenSubtitles (téléchargement des sous-titres manquants) ─────────────────
 # Beaucoup de rips BluRay n'ont que des sous-titres PGS (image) : impossible à
