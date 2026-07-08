@@ -28,7 +28,6 @@ et trois modes de lecture : navigateur, Chromecast, et sortie HDMI directe.
 |------|---------------------|------------|
 |  **PC** (navigateur) | L'ordinateur client | Tout format, le PC fait le travail |
 |  **Chromecast** | Le Chromecast (le serveur transcode si besoin) | H.264 1080p |
-|  **TV directe** (MPV) | La machine serveur (HDMI) | HEVC sur matériel compatible |
 
 Le mode se choisit dans la barre de navigation et est mémorisé.
 
