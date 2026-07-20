@@ -34,7 +34,7 @@ SUPPORTED_EXTS   = {".mp4", ".mkv"}
 HOST             = "0.0.0.0"
 PORT             = 8765
 
-TMDB_API_KEY     = ""
+TMDB_API_KEY     = "ba6207ce3c9ed44aa35c383f55ebab5e"
 
 # ─── OpenSubtitles (téléchargement des sous-titres manquants) ─────────────────
 # Beaucoup de rips BluRay n'ont que des sous-titres PGS (image) : impossible à
@@ -72,8 +72,10 @@ def _default_settings() -> dict:
         "opensubtitles_username": OPENSUBTITLES_USERNAME,
         "opensubtitles_password": OPENSUBTITLES_PASSWORD,
         "opensubtitles_langs":    list(OPENSUBTITLES_LANGS),
-        "movies_dir":             str(_DEFAULT_MOVIES_DIR),
+        "movies_dirs":            [str(_DEFAULT_MOVIES_DIR)],
         "tracks_cache_dir":       str(_DEFAULT_TRACKS_CACHE_DIR),
+        "auto_scan_enabled":          True,
+        "auto_scan_interval_minutes": 60,
     }
 
 
@@ -85,8 +87,16 @@ def _load_settings() -> dict:
             for k in s:
                 if k in data and data[k] not in (None, ""):
                     s[k] = data[k]
+            # Migration : ancien champ unique « movies_dir » → liste « movies_dirs ».
+            if "movies_dirs" not in data and data.get("movies_dir"):
+                s["movies_dirs"] = [data["movies_dir"]]
         except Exception as e:
             print(f"Lecture des paramètres échouée : {e}")
+    # Normalise movies_dirs en liste de chemins non vides.
+    md = s.get("movies_dirs")
+    if isinstance(md, str):
+        md = [md]
+    s["movies_dirs"] = [p for p in (md or []) if str(p).strip()] or [str(_DEFAULT_MOVIES_DIR)]
     return s
 
 
@@ -95,8 +105,8 @@ _settings = _load_settings()
 
 def _apply_paths_from_settings():
     """Rebinde les chemins (films / cache sous-titres) depuis les paramètres."""
-    global MOVIES_DIR, TRACKS_CACHE_DIR
-    MOVIES_DIR = Path(_settings["movies_dir"]).expanduser()
+    global MOVIES_DIRS, TRACKS_CACHE_DIR
+    MOVIES_DIRS = [Path(p).expanduser() for p in _settings["movies_dirs"]]
     TRACKS_CACHE_DIR = Path(_settings["tracks_cache_dir"]).expanduser()
     try:
         TRACKS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,6 +186,10 @@ def stable_group_id(key: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__, static_folder=str(STATIC_DIR))
+# Ne pas laisser le navigateur garder app.js / style.css / index.html en cache
+# (par défaut Flask les met en cache 12 h → l'interface reste bloquée sur une
+# ancienne version après une mise à jour). 0 = revalidation à chaque chargement.
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 TRACKS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -186,6 +200,11 @@ def add_cors_headers(response):
     response.headers['Access-Control-Expose-Headers'] = (
         'Accept-Ranges, Content-Range, Content-Length, Content-Type'
     )
+    # Interface (HTML/JS/CSS) : jamais de cache long, pour que les mises à jour
+    # soient prises en compte immédiatement. Les vidéos ne sont pas concernées.
+    p = request.path
+    if p == '/' or p.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
 
 
@@ -593,7 +612,7 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
         try:
             result = subprocess.run([
                 "ffprobe", "-v", "quiet", "-print_format", "json",
-                "-show_streams", str(filepath)
+                "-show_streams", "-show_format", str(filepath)
             ], capture_output=True, text=True, timeout=30)
             data = json.loads(result.stdout)
         except Exception as e:
@@ -716,12 +735,18 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
                     extraction_complete = False
                     failures.append(f"Externe {simple_sub.name} : {reason}")
 
+        try:
+            duration = float(data.get("format", {}).get("duration"))
+        except (TypeError, ValueError):
+            duration = None
+
         metadata = {
             "audio_tracks":        audio_tracks,
             "subtitle_tracks":     subtitle_tracks,
             "extraction_complete": extraction_complete,
             "failures":            failures,
             "skipped":             skipped,
+            "duration":            duration,
         }
         metadata_file.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -735,6 +760,71 @@ def clear_tracks_cache(movie_id: str):
     cache_dir = TRACKS_CACHE_DIR / movie_id
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
+
+
+def _read_cached_meta(movie_id: str) -> dict | None:
+    meta_file = TRACKS_CACHE_DIR / movie_id / "tracks.json"
+    if meta_file.exists():
+        try:
+            return json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _with_sibling_subs(movie: dict, data: dict) -> dict:
+    """
+    Ajoute aux sous-titres du film ceux des AUTRES versions (HD/4K) déjà en
+    cache, sans les ré-extraire. Dédoublonnage par (langue, libellé).
+    """
+    siblings = [s for s in (movie.get("sibling_ids") or []) if s != movie["id"]]
+    if not siblings:
+        return data
+    merged = list(data.get("subtitle_tracks", []))
+    seen = {(t.get("language"), t.get("label")) for t in merged}
+    for sid in siblings:
+        meta = _read_cached_meta(sid)
+        if not meta:
+            continue
+        for t in meta.get("subtitle_tracks", []):
+            key = (t.get("language"), t.get("label"))
+            if key not in seen:
+                seen.add(key)
+                merged.append(t)
+    return {**data, "subtitle_tracks": merged}
+
+
+def _get_duration(filepath: str):
+    """Durée du film en secondes (via ffprobe), ou None."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", str(filepath)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return float(json.loads(r.stdout).get("format", {}).get("duration"))
+    except Exception:
+        return None
+
+
+def _with_duration(movie: dict, data: dict) -> dict:
+    """Garantit la présence de la durée (la calcule et la persiste si absente)."""
+    if data.get("duration"):
+        return data
+    dur = _get_duration(movie["path"])
+    if dur is None:
+        return data
+    data = {**data, "duration": dur}
+    # Persiste dans le cache pour ne pas re-sonder à chaque ouverture.
+    meta_file = TRACKS_CACHE_DIR / movie["id"] / "tracks.json"
+    try:
+        if meta_file.exists():
+            m = json.loads(meta_file.read_text(encoding="utf-8"))
+            m["duration"] = dur
+            meta_file.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return data
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -813,43 +903,120 @@ def _os_login() -> tuple:
             return False, f"login injoignable : {e}"
 
 
-def _os_search(movie: dict, lang: str):
-    """Cherche un sous-titre pour un film dans une langue. Renvoie le meilleur file_id ou None."""
-    params_base = {"languages": lang}
-    mh = movie.get("_os_hash")
-    attempts = []
-    if mh:
-        attempts.append({**params_base, "moviehash": mh})
-    # Repli par titre (+ année) si le hash ne donne rien.
-    query = movie.get("title") or Path(movie["path"]).stem
-    q = {**params_base, "query": query}
-    if movie.get("year"):
-        q["year"] = movie["year"]
-    attempts.append(q)
+def _norm_title(s: str) -> str:
+    """Titre normalisé pour comparaison (minuscules, sans ponctuation)."""
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
-    for params in attempts:
-        try:
-            r = requests.get(
-                f"{OPENSUBTITLES_BASE}/subtitles",
-                headers=_os_headers(), params=params, timeout=15,
-            )
-            if r.status_code != 200:
-                continue
-            data = r.json().get("data", [])
-            if not data:
-                continue
-            # Priorité : correspondance par hash, puis nombre de téléchargements.
-            def score(item):
-                attr = item.get("attributes", {})
-                return (1 if attr.get("moviehash_match") else 0,
-                        attr.get("download_count", 0) or 0)
-            data.sort(key=score, reverse=True)
-            for item in data:
-                files = item.get("attributes", {}).get("files", [])
-                if files and files[0].get("file_id"):
-                    return files[0]["file_id"]
-        except Exception as e:
-            print(f"Recherche OpenSubtitles échec ({lang}) : {e}")
+
+def _os_query(params: dict) -> list:
+    """Un appel de recherche OpenSubtitles. Renvoie la liste des résultats."""
+    try:
+        r = requests.get(
+            f"{OPENSUBTITLES_BASE}/subtitles",
+            headers=_os_headers(), params=params, timeout=15,
+        )
+        if r.status_code != 200:
+            return []
+        return r.json().get("data", []) or []
+    except Exception as e:
+        print(f"Recherche OpenSubtitles échec : {e}")
+        return []
+
+
+def _os_pick_best(data: list, movie: dict, lang: str, verify_meta: bool):
+    """
+    Choisit le MEILLEUR sous-titre parmi des résultats, avec des garde-fous
+    contre les mauvais appariements :
+      - langue exacte ;
+      - (si verify_meta) année ±1 et titre cohérent avec le film ;
+      - on écarte les « foreign parts only » (quasi vides) ;
+      - on privilégie hash match, sources de confiance, notes, téléchargements.
+    Renvoie un file_id ou None.
+    """
+    try:
+        want_year = int(movie["year"]) if movie.get("year") else None
+    except (TypeError, ValueError):
+        want_year = None
+    want_title = _norm_title(movie.get("title"))
+
+    cands = []
+    for item in data:
+        attr = item.get("attributes", {}) or {}
+        if _norm_lang(attr.get("language")) != _norm_lang(lang):
+            continue
+        files = attr.get("files") or []
+        if not files or not files[0].get("file_id"):
+            continue
+
+        fd = attr.get("feature_details", {}) or {}
+        if verify_meta:
+            fy = fd.get("year")
+            try:
+                fy = int(fy) if fy else None
+            except (TypeError, ValueError):
+                fy = None
+            if want_year and fy and abs(fy - want_year) > 1:
+                continue   # mauvaise année → très probablement le mauvais film
+            ft = _norm_title(fd.get("title") or fd.get("movie_name"))
+            if want_title and ft and want_title not in ft and ft not in want_title:
+                aw, bw = set(want_title.split()), set(ft.split())
+                if not aw or len(aw & bw) / len(aw) < 0.6:
+                    continue   # titre trop différent
+
+        cands.append((item, attr, files[0]["file_id"]))
+
+    if not cands:
+        return None
+
+    def score(c):
+        attr = c[1]
+        return (
+            0 if attr.get("foreign_parts_only") else 1,   # évite les sous-titres partiels
+            1 if attr.get("moviehash_match") else 0,
+            1 if attr.get("from_trusted") else 0,
+            float(attr.get("ratings") or 0),
+            int(attr.get("download_count") or 0),
+        )
+    cands.sort(key=score, reverse=True)
+    return cands[0][2]
+
+
+def _os_search(movie: dict, lang: str):
+    """
+    Cherche le meilleur sous-titre pour un film/épisode, du plus fiable au moins
+    fiable : hash du fichier → identifiant TMDB (exact) → repli par titre/année
+    (avec vérification stricte). Renvoie un file_id ou None.
+    """
+    is_episode = movie.get("season") is not None and movie.get("episode") is not None
+    tmdb_id    = movie.get("tmdb_id")
+    strategies = []   # (params, verify_meta)
+
+    mh = movie.get("_os_hash")
+    if mh:
+        strategies.append(({"moviehash": mh, "languages": lang}, False))
+
+    if tmdb_id and is_episode:
+        strategies.append(({
+            "parent_tmdb_id": tmdb_id,
+            "season_number":  movie["season"],
+            "episode_number": movie["episode"],
+            "languages": lang, "type": "episode",
+        }, False))
+    elif tmdb_id:
+        strategies.append(({"tmdb_id": tmdb_id, "languages": lang, "type": "movie"}, False))
+
+    # Repli par titre : uniquement pour les films (pour un épisode sans TMDB, une
+    # recherche « S01E01 » ne donnerait que du bruit → on s'abstient).
+    if not is_episode:
+        q = {"query": movie.get("title") or Path(movie["path"]).stem, "languages": lang}
+        if movie.get("year"):
+            q["year"] = movie["year"]
+        strategies.append((q, True))
+
+    for params, verify in strategies:
+        best = _os_pick_best(_os_query(params), movie, lang, verify)
+        if best:
+            return best
     return None
 
 
@@ -959,6 +1126,7 @@ def _tmdb_format(m: dict, title_key: str = "title") -> dict:
         "backdrop": f"https://image.tmdb.org/t/p/w1280{m['backdrop_path']}" if m.get("backdrop_path") else None,
         "overview": m.get("overview", ""),
         "tmdb_title": m.get(title_key, ""),
+        "tmdb_id": m.get("id"),
     }
 
 
@@ -1025,21 +1193,29 @@ def scan_movies() -> list:
     movie_groups = {}
     playable = {}        # id de fichier -> dict jouable (path, title, ext...)
 
-    if not MOVIES_DIR.exists():
-        print(f"Dossier introuvable : {MOVIES_DIR}")
+    roots = [d for d in MOVIES_DIRS if d.exists()]
+    if not roots:
+        print(f"Aucun dossier de films accessible : {[str(d) for d in MOVIES_DIRS]}")
         _set_playable(playable)
         return items
 
-    for filepath in sorted(MOVIES_DIR.rglob("*")):
-        if filepath.suffix.lower() not in SUPPORTED_EXTS:
-            continue
-        try:
-            rel = filepath.relative_to(MOVIES_DIR)
-        except ValueError:
-            continue
-        if any(part.startswith(".") for part in rel.parts):
-            continue
+    # On agrège les fichiers de TOUS les dossiers configurés (même structure
+    # Films/<catégorie>/…). L'id étant un MD5 du chemin complet, il reste unique
+    # même si deux disques ont la même arborescence.
+    scanned = []
+    for root in roots:
+        for filepath in root.rglob("*"):
+            if filepath.suffix.lower() not in SUPPORTED_EXTS:
+                continue
+            try:
+                rel = filepath.relative_to(root)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            scanned.append((filepath, rel))
 
+    for filepath, rel in sorted(scanned, key=lambda t: str(t[0])):
         movie_id = stable_file_id(filepath)
         ep = parse_episode(filepath.name)
 
@@ -1102,6 +1278,11 @@ def scan_movies() -> list:
             key=lambda v: (v["quality_height"], v["size_mb"]),
             reverse=True,
         )
+        # Toutes les versions d'un même film partagent leurs sous-titres : on
+        # note sur chaque variante la liste des ids frères (HD, 4K…).
+        variant_ids = [v["id"] for v in variants]
+        for v in variants:
+            v["sibling_ids"] = variant_ids
         primary = variants[0]
         items.append({
             "id":        primary["id"],          # id jouable par défaut (meilleure qualité)
@@ -1160,6 +1341,19 @@ def scan_movies() -> list:
             it["poster"]   = tmdb["poster"]
             it["backdrop"] = tmdb["backdrop"]
             it["overview"] = tmdb["overview"]
+            # Propage l'id TMDB aux fichiers jouables : indispensable pour un
+            # appariement fiable des sous-titres OpenSubtitles.
+            tid = tmdb.get("tmdb_id")
+            it["tmdb_id"] = tid
+            if tid:
+                if it["kind"] == "movie":
+                    for q in it.get("qualities", []):
+                        if q["id"] in playable:
+                            playable[q["id"]]["tmdb_id"] = tid
+                else:
+                    for ep in it.get("episodes", []):
+                        if ep["id"] in playable:
+                            playable[ep["id"]]["tmdb_id"] = tid
 
     _set_playable(playable)
     _save_tmdb_cache()
@@ -1281,13 +1475,21 @@ def _cached_sub_langs(movie_id: str) -> set:
     return langs
 
 
-def _needs_download(movie_id: str) -> bool:
+def _group_sub_langs(movie: dict) -> set:
+    """Langues de sous-titres présentes sur TOUTE version du film (HD + 4K…)."""
+    langs = set()
+    for sid in (movie.get("sibling_ids") or [movie["id"]]):
+        langs |= _cached_sub_langs(sid)
+    return langs
+
+
+def _needs_download(movie: dict) -> bool:
     """
-    Vrai si le film n'a PAS de sous-titre français : aucun sous-titre du tout,
-    seulement de l'anglais, ou seulement des externes non-français. C'est ce qui
-    déclenche le téléchargement d'un .srt français en ligne.
+    Vrai si AUCUNE version du film n'a de sous-titre français (rien, ou seulement
+    de l'anglais / un externe). Comme les versions partagent leurs sous-titres,
+    un seul téléchargement couvre HD et 4K.
     """
-    return "fr" not in _cached_sub_langs(movie_id)
+    return "fr" not in _group_sub_langs(movie)
 
 
 def _run_subtitle_scan(mode: str = "new"):
@@ -1314,7 +1516,18 @@ def _run_subtitle_scan(mode: str = "new"):
     if mode == "retry":
         items = [it for it in items if _needs_retry(it["id"])]
     elif mode == "download":
-        items = [it for it in items if _needs_download(it["id"])]
+        # Un seul téléchargement par film (les versions HD/4K partagent les S-T) :
+        # on garde une seule variante par groupe.
+        filtered, seen_groups = [], set()
+        for it in items:
+            if not _needs_download(it):
+                continue
+            gid = tuple(sorted(it.get("sibling_ids") or [it["id"]]))
+            if gid in seen_groups:
+                continue
+            seen_groups.add(gid)
+            filtered.append(it)
+        items = filtered
 
     with _subs_scan_lock:
         _subs_scan_state.update({
@@ -1352,7 +1565,7 @@ def _run_subtitle_scan(mode: str = "new"):
                 dl_ok, dl_info = download_subtitle_for(item)
                 meta = extract_tracks(item, force=True)
                 reasons = meta.get("failures", [])
-                present = _cached_sub_langs(item["id"])   # langues après extraction
+                present = _group_sub_langs(item)   # langues de toutes les versions
                 has_fr  = "fr" in present
                 with _subs_scan_lock:
                     if reasons:
@@ -1446,6 +1659,59 @@ def start_subtitle_scan(mode: str = "new") -> bool:
     )
     _subs_scan_thread.start()
     return True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANALYSE AUTOMATIQUE PÉRIODIQUE
+# ══════════════════════════════════════════════════════════════════════════════
+# Toutes les N minutes (réglable dans les Paramètres) :
+#   1. redétecte les nouveaux films ajoutés sur le disque ;
+#   2. extrait leurs sous-titres ;
+#   3. télécharge le sous-titre français manquant (si clé OpenSubtitles définie).
+
+def _wait_scan_done(timeout: float = 6 * 3600):
+    """Bloque tant qu'une analyse est en cours (avec garde-fou de temps)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _subs_scan_lock:
+            if not _subs_scan_state["running"]:
+                return
+        time.sleep(2)
+
+
+def _run_auto_cycle():
+    """Un passage complet : rescan disque → extraction → téléchargement FR."""
+    global _movies_cache
+    _wait_scan_done()                       # laisse finir un scan démarrage/manuel
+    with _movies_lock:
+        _movies_cache = None                # force la redétection des nouveaux fichiers
+    if start_subtitle_scan(mode="new"):
+        _wait_scan_done()
+    # Téléchargement seulement si OpenSubtitles est configuré et l'auto encore actif.
+    if _settings.get("opensubtitles_api_key") and _settings.get("auto_scan_enabled", True):
+        if start_subtitle_scan(mode="download"):
+            _wait_scan_done()
+
+
+def _auto_scan_loop():
+    """Boucle de fond de l'analyse automatique."""
+    time.sleep(120)                          # laisse le démarrage se terminer
+    while True:
+        try:
+            if _settings.get("auto_scan_enabled", True):
+                print("Analyse automatique : démarrage d'un cycle…")
+                _run_auto_cycle()
+                print("Analyse automatique : cycle terminé.")
+        except Exception as e:
+            print(f"Analyse automatique : erreur — {e}")
+        try:
+            interval = max(5, int(_settings.get("auto_scan_interval_minutes", 60)))
+        except Exception:
+            interval = 60
+        # Sommeil découpé en tranches d'1 min pour réagir vite à un changement
+        # d'intervalle ou de l'activation via les Paramètres.
+        for _ in range(interval):
+            time.sleep(60)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1641,6 +1907,96 @@ def _transcode_stream(filepath: str, v_arg: list, a_arg: list):
     return Response(generate(), mimetype="video/mp4")
 
 
+# ─── TRANSCODAGE HLS POUR LE CAST ─────────────────────────────────────────────
+# Le pipe MP4 fragmenté (_transcode_stream) est fragile : pas de Content-Length,
+# pas de Range, pas de durée. À la moindre micro-coupure Wi-Fi ou stall TCP, le
+# Chromecast re-demande la ressource avec un en-tête Range… que le pipe ne peut
+# pas honorer : il repart de zéro et la session est perdue (typiquement après
+# ~1 h de lecture). Le HLS règle ça : ffmpeg écrit des segments de 4 s sur
+# disque, servis en fichiers statiques. Le Chromecast peut re-télécharger un
+# segment, se reconnecter, re-buffériser… sans jamais perdre la session.
+
+_hls_lock  = threading.Lock()
+_hls_procs = {}   # "movie_id:variant" -> Popen
+
+
+def _hls_dir(movie_id: str, variant: str) -> Path:
+    return TRACKS_CACHE_DIR / movie_id / f"hls_{variant}"
+
+
+def _hls_finished(playlist: Path) -> bool:
+    try:
+        return playlist.exists() and "#EXT-X-ENDLIST" in playlist.read_text(errors="ignore")
+    except Exception:
+        return False
+
+
+def _start_cast_hls(movie: dict, v_arg: list, a_arg: list, variant: str) -> Path | None:
+    """
+    Lance (ou réutilise) un transcodage HLS vers le cache.
+    Bloque jusqu'à ce que la playlist contienne ses premiers segments
+    (démarrage en quelques secondes), puis retourne son chemin — ou None
+    si ffmpeg meurt avant.
+    """
+    out_dir  = _hls_dir(movie["id"], variant)
+    playlist = out_dir / "index.m3u8"
+    key      = f"{movie['id']}:{variant}"
+
+    with _hls_lock:
+        if _hls_finished(playlist):
+            return playlist                      # déjà transcodé entièrement
+
+        proc = _hls_procs.get(key)
+        if proc is None or proc.poll() is not None:
+            # (Re)démarrage propre : on purge les restes d'une session tuée.
+            shutil.rmtree(out_dir, ignore_errors=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(movie["path"]),
+                *v_arg, *a_arg,
+                "-sn", "-dn",
+                "-f", "hls",
+                "-hls_time", "4",
+                "-hls_playlist_type", "event",
+                "-hls_flags", "independent_segments+temp_file",
+                "-hls_segment_filename", str(out_dir / "seg_%05d.ts"),
+                str(playlist),
+            ]
+            log_fh = open(out_dir / "ffmpeg.log", "wb")
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_fh)
+            _hls_procs[key] = proc
+            print(f"HLS transcodage démarré ({variant}) : {movie['filename']}")
+
+    # Attend les premiers segments pour que le Chromecast démarre sans 404.
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if playlist.exists() and playlist.stat().st_size > 0:
+            return playlist
+        if proc.poll() is not None and not _hls_finished(playlist):
+            print(f"HLS échec (voir {out_dir / 'ffmpeg.log'})")
+            return None
+        time.sleep(0.25)
+    return None
+
+
+def _cast_transcode_args(codecs: dict, audio_idx: int | None):
+    """Arguments ffmpeg vidéo/audio pour le transcodage Chromecast."""
+    video_ok = (codecs["video"] in VIDEO_OK) and not codecs.get("high_bit")
+    v_arg = ["-map", "0:v:0", "-c:v", "copy"] if video_ok else [
+        "-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"
+    ]
+    if audio_idx is not None:
+        a_arg = ["-map", f"0:a:{audio_idx}", "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
+    else:
+        audio_ok = codecs["audio"] in AUDIO_OK
+        a_arg = ["-map", "0:a:0", "-c:a", "copy"] if audio_ok else [
+            "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"
+        ]
+    return v_arg, a_arg
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1673,7 +2029,14 @@ def api_tracks(movie_id):
     movie = get_movie_by_id(movie_id)
     if not movie:
         return jsonify({"error": "Film introuvable"}), 404
-    return jsonify(extract_tracks(movie))
+    data = extract_tracks(movie)
+    # Sous-titres partagés entre versions (HD/4K) : on fusionne ceux des autres
+    # variantes déjà en cache. Leur URL /track/subs/<autre_id>/… reste valide,
+    # un VTT étant un fichier de texte indépendant de la vidéo.
+    data = _with_sibling_subs(movie, data)
+    # Durée du film (pour l'affichage de la fiche), calculée si absente.
+    data = _with_duration(movie, data)
+    return jsonify(data)
 
 
 @app.route("/api/tracks/<movie_id>/refresh")
@@ -1723,9 +2086,14 @@ def api_get_settings():
             "opensubtitles_username":  _settings["opensubtitles_username"],
             "opensubtitles_langs":     ", ".join(_settings["opensubtitles_langs"] or []),
             "opensubtitles_password_set": bool(_settings["opensubtitles_password"]),
-            "movies_dir":              _settings["movies_dir"],
+            "movies_dirs":             _settings["movies_dirs"],
             "tracks_cache_dir":        _settings["tracks_cache_dir"],
-            "movies_dir_exists":       Path(_settings["movies_dir"]).expanduser().exists(),
+            "movies_dirs_status": [
+                {"path": p, "exists": Path(p).expanduser().exists()}
+                for p in _settings["movies_dirs"]
+            ],
+            "auto_scan_enabled":          bool(_settings["auto_scan_enabled"]),
+            "auto_scan_interval_minutes": _settings["auto_scan_interval_minutes"],
         })
 
 
@@ -1744,10 +2112,19 @@ def api_save_settings():
         if key in body:
             new[key] = (body[key] or "").strip()
 
-    # Chemins : dossier des films et dossier de stockage des sous-titres.
-    for key in ("movies_dir", "tracks_cache_dir"):
-        if key in body and (body[key] or "").strip():
-            new[key] = body[key].strip()
+    # Dossiers des films : liste (ou texte multi-lignes / séparé par des virgules).
+    if "movies_dirs" in body:
+        raw = body["movies_dirs"]
+        if isinstance(raw, list):
+            dirs = [str(x).strip() for x in raw if str(x).strip()]
+        else:
+            dirs = [line.strip() for line in re.split(r"[\r\n]+", str(raw)) if line.strip()]
+        if dirs:
+            new["movies_dirs"] = dirs
+
+    # Dossier de stockage des sous-titres (unique).
+    if "tracks_cache_dir" in body and (body["tracks_cache_dir"] or "").strip():
+        new["tracks_cache_dir"] = body["tracks_cache_dir"].strip()
 
     # Langues : "fr, en" → ["fr", "en"]
     if "opensubtitles_langs" in body:
@@ -1763,20 +2140,31 @@ def api_save_settings():
     if pwd:
         new["opensubtitles_password"] = pwd
 
+    # Analyse automatique
+    if "auto_scan_enabled" in body:
+        new["auto_scan_enabled"] = bool(body["auto_scan_enabled"])
+    if "auto_scan_interval_minutes" in body:
+        try:
+            new["auto_scan_interval_minutes"] = max(5, int(body["auto_scan_interval_minutes"]))
+        except (TypeError, ValueError):
+            pass
+
     ok = save_settings(new)
 
     # Si un chemin a changé : on rebinde les globals et on force un rescan de la
-    # bibliothèque au prochain /api/movies (nouveau dossier de films).
-    paths_changed = ok and any(k in new for k in ("movies_dir", "tracks_cache_dir"))
+    # bibliothèque au prochain /api/movies (nouveaux dossiers de films).
+    paths_changed = ok and any(k in new for k in ("movies_dirs", "tracks_cache_dir"))
     if paths_changed:
         _apply_paths_from_settings()
         with _movies_lock:
             _movies_cache = None
 
     return jsonify({
-        "status":            "ok" if ok else "error",
-        "paths_changed":     paths_changed,
-        "movies_dir_exists": MOVIES_DIR.exists(),
+        "status":         "ok" if ok else "error",
+        "paths_changed":  paths_changed,
+        "movies_dirs_status": [
+            {"path": str(d), "exists": d.exists()} for d in MOVIES_DIRS
+        ],
     }), (200 if ok else 500)
 
 
@@ -1879,6 +2267,70 @@ def cast_video(movie_id):
     return _transcode_stream(filepath, v_arg, a_arg)
 
 
+# ─── INFO CAST : le frontend demande quelle URL / quel mime utiliser ─────────
+
+@app.route("/api/cast_info/<movie_id>")
+def cast_info(movie_id):
+    """
+    Décide du mode de diffusion Chromecast et retourne {url, mime, mode} :
+      - direct : fichier brut compatible (send_file avec Range → robuste)
+      - remux  : piste audio alternative, MP4 cache seekable (Range → robuste)
+      - hls    : transcodage nécessaire → playlist HLS (segments → robuste)
+    Le pipe MP4 fragmenté n'est plus utilisé pour le cast : il perdait la
+    session à la première reconnexion réseau (plantage après ~1 h).
+    """
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return jsonify({"error": "Film introuvable"}), 404
+
+    codecs = probe_codecs(movie["path"])
+    audio_idx = request.args.get("audio", default=None, type=int)
+    video_ok = (codecs["video"] in VIDEO_OK) and not codecs.get("high_bit")
+    audio_ok = codecs["audio"] in AUDIO_OK
+
+    if video_ok and audio_idx is None and audio_ok:
+        return jsonify({
+            "url": f"/cast/{movie_id}",
+            "mime": MIME_MAP.get(movie["ext"], "video/mp4"),
+            "mode": "direct",
+        })
+
+    if video_ok and audio_idx is not None:
+        return jsonify({
+            "url": f"/cast/{movie_id}?audio={audio_idx}",
+            "mime": "video/mp4",
+            "mode": "remux",
+        })
+
+    # Transcodage nécessaire → HLS
+    v_arg, a_arg = _cast_transcode_args(codecs, audio_idx)
+    variant = f"a{audio_idx}" if audio_idx is not None else "auto"
+    playlist = _start_cast_hls(movie, v_arg, a_arg, variant)
+    if playlist is None:
+        return jsonify({"error": "Échec du démarrage du transcodage"}), 500
+    return jsonify({
+        "url": f"/cast_hls/{movie_id}/{variant}/index.m3u8",
+        "mime": "application/x-mpegURL",
+        "mode": "hls",
+    })
+
+
+@app.route("/cast_hls/<movie_id>/<variant>/<path:fname>")
+def cast_hls_files(movie_id, variant, fname):
+    """Sert la playlist et les segments HLS depuis le cache."""
+    if "/" in fname or ".." in fname:
+        return Response("Chemin invalide", status=400)
+    f = _hls_dir(movie_id, variant) / fname
+    if not f.exists():
+        return Response("Introuvable", status=404)
+    if fname.endswith(".m3u8"):
+        resp = send_file(str(f), mimetype="application/vnd.apple.mpegurl")
+        # La playlist grandit pendant le transcodage : jamais de cache.
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    return send_file(str(f), mimetype="video/mp2t", conditional=True)
+
+
 # ─── LECTURE LOCALE HDMI (MPV) ────────────────────────────────────────────────
 
 _current_player = None
@@ -1950,7 +2402,7 @@ def stop_local():
 if __name__ == "__main__":
     print("━" * 60)
     print("CineLocal — Serveur de films local")
-    print(f"Dossier films : {MOVIES_DIR}")
+    print(f"Dossiers films : {', '.join(str(d) for d in MOVIES_DIRS)}")
     print(f"Interface     : http://localhost:{PORT}")
     print(f"Pour TV/Cast  : http://<ton-ip>:{PORT}")
     print("━" * 60)
@@ -1961,5 +2413,8 @@ if __name__ == "__main__":
     # Grâce aux id MD5 stables, les caches existants sont réutilisés après un
     # redémarrage : seuls les fichiers nouveaux ou modifiés sont ré-extraits.
     start_subtitle_scan()
+
+    # Analyse automatique périodique (nouveaux films + extraction + téléchargement FR).
+    threading.Thread(target=_auto_scan_loop, daemon=True).start()
 
     serve(app, host=HOST, port=PORT, threads=8)

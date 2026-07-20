@@ -528,6 +528,10 @@ google-cast-launcher {
   line-height: 1.55; color: #d8d2c4;
   max-width: 520px; margin-bottom: 2.2rem;
 }
+.fiche-versions {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0 0 1.3rem;
+}
 .fiche-subs {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
   margin: -0.8rem 0 1.6rem;
@@ -704,9 +708,19 @@ google-cast-launcher {
   outline: none; transition: border-color .2s;
 }
 .set-input:focus { border-color: var(--gold); }
+.set-textarea { resize: vertical; min-height: 3.2rem; line-height: 1.5; }
 .set-hint {
   font-family: 'Crimson Pro', serif; font-size: 0.82rem;
   color: var(--muted); line-height: 1.4; margin-top: 0.3rem;
+}
+.set-check {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  margin-bottom: 0.8rem; cursor: pointer;
+  font-family: 'Crimson Pro', serif; font-size: 0.95rem; color: var(--text);
+}
+.set-check input {
+  width: 18px; height: 18px; margin-top: 0.15rem;
+  accent-color: var(--gold); flex-shrink: 0; cursor: pointer;
 }
 .set-status {
   font-family: 'DM Mono', monospace; font-size: 0.7rem;

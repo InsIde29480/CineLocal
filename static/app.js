@@ -105,17 +105,43 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
   if (!castSession) return;
   attempt = attempt || 1;
 
-  var castUrl = (audioIdx > 0)
-    ? (window.location.origin + '/cast/' + movie.id + '?audio=' + audioIdx)
-    : (window.location.origin + '/cast/' + movie.id);
+  // Le serveur décide du mode : direct (fichier brut), remux (MP4 cache) ou
+  // HLS (transcodage). Les trois sont « reconnectables » : le Chromecast peut
+  // re-demander une plage d'octets ou un segment sans perdre la session —
+  // contrairement à l'ancien pipe MP4 qui plantait après ~1 h.
+  var infoUrl = '/api/cast_info/' + movie.id + (audioIdx > 0 ? '?audio=' + audioIdx : '');
+  fetch(infoUrl)
+    .then(function (r) { return r.json(); })
+    .then(function (info) {
+      if (!info || info.error) {
+        alert('Erreur Cast : ' + (info && info.error ? info.error : 'réponse invalide'));
+        return;
+      }
+      launchCastMedia(movie, audioIdx, subTrack, attempt, info);
+    })
+    .catch(function (e) {
+      console.error('[Cast] cast_info échoué :', e);
+      if (attempt < 3) {
+        setTimeout(function () { sendToCast(movie, audioIdx, subTrack, attempt + 1); }, 1500);
+      } else {
+        alert('Erreur Cast : impossible de préparer le flux');
+      }
+    });
+}
 
-  var mimeMap = { '.mp4': 'video/mp4', '.mkv': 'video/x-matroska', '.webm': 'video/webm' };
-  // Avec une piste audio alternative, le serveur renvoie toujours un MP4
-  // remuxé : on annonce donc video/mp4 au Chromecast, pas le conteneur
-  // d'origine (sinon un .mkv source ferait échouer le chargement).
-  var mime = (audioIdx > 0) ? 'video/mp4' : (mimeMap[movie.ext] || 'video/mp4');
+function launchCastMedia(movie, audioIdx, subTrack, attempt, info) {
+  if (!castSession) return;
 
-  var mediaInfo = new chrome.cast.media.MediaInfo(castUrl, mime);
+  var castUrl = window.location.origin + info.url;
+  var mediaInfo = new chrome.cast.media.MediaInfo(castUrl, info.mime);
+
+  if (info.mode === 'hls') {
+    mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
+    if (chrome.cast.media.HlsSegmentFormat) {
+      mediaInfo.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.TS;
+    }
+  }
+
   mediaInfo.metadata = new chrome.cast.media.MovieMediaMetadata();
   mediaInfo.metadata.title = movie.title;
   if (movie.year)   mediaInfo.metadata.releaseDate = movie.year;
@@ -159,7 +185,7 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
 // ═══════════════════════════════════════════════════════════════════
 // MODAL OPTIONS (PC navigateur / Chromecast / TV directe)
 // ═══════════════════════════════════════════════════════════════════
-function openOptions(movie, target) {
+function openOptions(movie, target, initialQuality) {
   optionsTarget    = target;
   currentMovie     = movie;
   castMoviePending = movie;
@@ -173,7 +199,8 @@ function openOptions(movie, target) {
   optQualities = (movie.qualities && movie.qualities.length)
     ? movie.qualities.slice()
     : [{ id: movie.id, label: '', height: 0, size_mb: movie.size_mb, ext: movie.ext }];
-  optSelectedQuality = 0;
+  // Pré-sélectionne la version choisie dans la fiche (bornée à la liste).
+  optSelectedQuality = Math.min(Math.max(initialQuality || 0, 0), optQualities.length - 1);
 
   var titles = {
     pc:    ['🎞️ Choix de la qualité', '▶ Lire'],
@@ -767,6 +794,9 @@ var currentFiche     = null;
 var ficheSubTracks   = [];      // pistes de sous-titres du film affiché
 var ficheSelectedSub = null;    // index dans ficheSubTracks, ou null = aucun
 var ficheToken       = 0;       // anti-course sur le chargement des pistes
+var ficheQualities       = [];  // versions/qualités du film affiché
+var ficheSelectedQuality = 0;   // index dans ficheQualities
+var ficheBaseMeta        = '';  // méta de la fiche sans la durée
 
 // ─── Préférence GLOBALE de sous-titres (mémorisée, appliquée partout en PC) ──
 function getSubPref() {
@@ -782,6 +812,16 @@ function setSubPref(track) {
 function fmtSize(mb) {
   if (!mb) return '';
   return mb >= 1024 ? (Math.round(mb / 102.4) / 10 + ' Go') : (mb + ' Mo');
+}
+
+// Durée en secondes → « 1h52 » ou « 47min »
+function fmtDuration(sec) {
+  sec = Math.round(sec || 0);
+  if (sec <= 0) return '';
+  var h = Math.floor(sec / 3600);
+  var m = Math.round((sec % 3600) / 60);
+  if (m === 60) { return (h + 1) + 'h00'; }
+  return h > 0 ? (h + 'h' + (m < 10 ? '0' : '') + m) : (m + 'min');
 }
 
 function openMovieDetails(id) {
@@ -800,7 +840,8 @@ function openMovieDetails(id) {
     fmtSize(best ? best.size_mb : m.size_mb),
     has4k ? '4K' : (best && best.label) || '',
   ].filter(Boolean);
-  document.getElementById('ficheMeta').textContent = metaParts.join(' · ');
+  ficheBaseMeta = metaParts.join(' · ');   // la durée s'ajoute au chargement des pistes
+  document.getElementById('ficheMeta').textContent = ficheBaseMeta;
 
   var ov = document.getElementById('ficheOverview');
   ov.textContent = m.overview || '';
@@ -821,55 +862,22 @@ function openMovieDetails(id) {
     letter.textContent = (m.title || '?').charAt(0).toUpperCase();
   }
 
-  // Boutons : un bouton lecture par qualité (4K / HD), + Chromecast + TV directe
-  var qs = (m.qualities && m.qualities.length)
+  // Versions/qualités : sélecteur (4K / 1080p / …) avec résolution, taille et
+  // format pour distinguer chaque version, même quand les libellés sont vides.
+  ficheQualities = (m.qualities && m.qualities.length)
     ? m.qualities
     : [{ id: m.id, label: '', ext: m.ext, size_mb: m.size_mb }];
-  var btns = '';
-  if (qs.length > 1) {
-    qs.forEach(function (q, i) {
-      btns += '<button class="btn-fiche ' + (i === 0 ? 'primary' : 'ghost') + '" onclick="fichePlay(' + i + ')">'
-        + '▶ Lire ' + escHtml(q.label || '') + '</button>';
-    });
-  } else {
-    btns += '<button class="btn-fiche primary" onclick="fichePlay(0)">▶ Lire</button>';
-  }
+  ficheSelectedQuality = 0;
+  renderFicheVersions();
+
+  // Boutons : Lire (la version choisie) + Chromecast (avec la version choisie)
+  var btns = '<button class="btn-fiche primary" onclick="fichePlay()">▶ Lire</button>';
   btns += '<button class="btn-fiche ghost" onclick="ficheCast()">📺 Chromecast</button>';
   // btns += '<button class="btn-fiche ghost" onclick="ficheLocal()">📽️ TV directe</button>';
   document.getElementById('ficheButtons').innerHTML = btns;
 
-  // Sous-titres : pré-chargement (extraction VTT côté serveur) + choix global.
-  // Chargés depuis la meilleure qualité ; la correspondance langue/libellé est
-  // faite au lancement si une autre variante est lue.
-  ficheSubTracks   = [];
-  ficheSelectedSub = null;
-  var subsEl = document.getElementById('ficheSubs');
-  subsEl.style.display = '';
-  subsEl.innerHTML = '<span class="fiche-subs-label">💬 Sous-titres</span>'
-    + '<span class="fiche-subs-loading">chargement…</span>';
-
-  var myToken = ficheToken;
-  fetch('/api/tracks/' + qs[0].id)
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      if (ficheToken !== myToken) return;   // autre fiche ouverte entre-temps
-      ficheSubTracks = data.subtitle_tracks || [];
-      // Pré-sélectionne la préférence globale mémorisée si elle correspond
-      var pref = getSubPref();
-      if (pref) {
-        var i = ficheSubTracks.findIndex(function (s) { return s.label === pref.label; });
-        if (i < 0 && pref.language && pref.language !== 'und') {
-          i = ficheSubTracks.findIndex(function (s) { return s.language === pref.language; });
-        }
-        ficheSelectedSub = (i >= 0) ? i : null;
-      }
-      renderFicheSubs();
-    })
-    .catch(function () {
-      if (ficheToken !== myToken) return;
-      ficheSubTracks = [];
-      renderFicheSubs();
-    });
+  // Sous-titres de la version sélectionnée (rechargés si on change de version).
+  loadFicheSubs(_ficheSelectedQ().id);
 
   document.getElementById('movie-modal').classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -906,15 +914,85 @@ function closeMovieModal() {
   document.body.style.overflow = '';
 }
 
-// Lecture navigateur de la qualité choisie. Le sous-titre sélectionné dans la
+// Libellé court d'une version : « 4K », « 1080p », « HD »… (sans taille ni format)
+function _qualityLabel(q) {
+  if (q.label) return q.label;
+  if (q.height) return q.height + 'p';
+  return 'HD';
+}
+
+function renderFicheVersions() {
+  var el = document.getElementById('ficheVersions');
+  if (!ficheQualities || ficheQualities.length <= 1) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  var html = '<span class="fiche-subs-label">🎞️ Version</span>';
+  ficheQualities.forEach(function (q, i) {
+    html += '<button class="sub-chip' + (ficheSelectedQuality === i ? ' active' : '')
+      + '" onclick="selectFicheVersion(' + i + ')">' + escHtml(_qualityLabel(q)) + '</button>';
+  });
+  el.innerHTML = html;
+}
+
+function selectFicheVersion(i) {
+  if (i === ficheSelectedQuality) return;
+  ficheSelectedQuality = i;
+  renderFicheVersions();
+  // Les sous-titres peuvent différer d'une version à l'autre : on les recharge.
+  loadFicheSubs(_ficheSelectedQ().id);
+}
+
+function _ficheSelectedQ() {
+  return ficheQualities[ficheSelectedQuality] || ficheQualities[0] || currentFiche;
+}
+
+// Charge les sous-titres d'une version (id de fichier) et remplit la fiche.
+function loadFicheSubs(qid) {
+  ficheToken++;                       // invalide un chargement précédent
+  var myToken = ficheToken;
+  ficheSubTracks   = [];
+  ficheSelectedSub = null;
+  var subsEl = document.getElementById('ficheSubs');
+  subsEl.style.display = '';
+  subsEl.innerHTML = '<span class="fiche-subs-label">💬 Sous-titres</span>'
+    + '<span class="fiche-subs-loading">chargement…</span>';
+
+  fetch('/api/tracks/' + qid)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (ficheToken !== myToken) return;   // version/fiche changée entre-temps
+      if (data.duration) {
+        document.getElementById('ficheMeta').textContent =
+          ficheBaseMeta + (ficheBaseMeta ? ' · ' : '') + fmtDuration(data.duration);
+      }
+      ficheSubTracks = data.subtitle_tracks || [];
+      // Pré-sélectionne la préférence globale mémorisée si elle correspond
+      var pref = getSubPref();
+      if (pref) {
+        var i = ficheSubTracks.findIndex(function (s) { return s.label === pref.label; });
+        if (i < 0 && pref.language && pref.language !== 'und') {
+          i = ficheSubTracks.findIndex(function (s) { return s.language === pref.language; });
+        }
+        ficheSelectedSub = (i >= 0) ? i : null;
+      }
+      renderFicheSubs();
+    })
+    .catch(function () {
+      if (ficheToken !== myToken) return;
+      ficheSubTracks = [];
+      renderFicheSubs();
+    });
+}
+
+// Lecture navigateur de la version choisie. Le sous-titre sélectionné dans la
 // fiche est activé au démarrage ; l'audio reste géré par le lecteur natif.
-function fichePlay(qIdx) {
+function fichePlay() {
   if (!currentFiche) return;
-  var m  = currentFiche;
-  var qs = (m.qualities && m.qualities.length)
-    ? m.qualities
-    : [{ id: m.id, ext: m.ext }];
-  var q  = qs[qIdx] || qs[0];
+  var m = currentFiche;
+  var q = _ficheSelectedQ();
   var play = Object.assign({}, m, { id: q.id, ext: q.ext || m.ext });
   var subTrack = (ficheSelectedSub !== null) ? ficheSubTracks[ficheSelectedSub] : null;
   closeMovieModal();
@@ -924,8 +1002,9 @@ function fichePlay(qIdx) {
 function ficheCast() {
   if (!currentFiche) return;
   var m = currentFiche;
+  var qi = ficheSelectedQuality;
   closeMovieModal();
-  openOptions(m, 'cast');
+  openOptions(m, 'cast', qi);
 }
 
 function ficheLocal() {
@@ -1066,7 +1145,16 @@ function renderMovies(movies) {
     byCategory[m.category].push(m);
   });
 
-  container.innerHTML = Object.entries(byCategory).map(function (entry) {
+  // Tri alphabétique par titre dans chaque catégorie (indépendamment de la
+  // qualité ou du disque d'origine).
+  var collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
+  Object.keys(byCategory).forEach(function (cat) {
+    byCategory[cat].sort(function (a, b) { return collator.compare(a.title, b.title); });
+  });
+
+  container.innerHTML = Object.entries(byCategory).sort(function (a, b) {
+    return collator.compare(a[0], b[0]);
+  }).map(function (entry) {
     var cat = entry[0], films = entry[1];
     return '<section class="category-section">'
       + '<div class="category-title">' + cat
@@ -1349,21 +1437,24 @@ function openSettingsModal() {
   fetch('/api/settings')
     .then(function (r) { return r.json(); })
     .then(function (s) {
-      document.getElementById('setMoviesDir').value = s.movies_dir || '';
+      document.getElementById('setMoviesDirs').value = (s.movies_dirs || []).join('\n');
       document.getElementById('setTracksDir').value = s.tracks_cache_dir || '';
       document.getElementById('setTmdbKey').value = s.tmdb_api_key || '';
       document.getElementById('setOsKey').value   = s.opensubtitles_api_key || '';
       document.getElementById('setOsUser').value  = s.opensubtitles_username || '';
       document.getElementById('setOsLangs').value = s.opensubtitles_langs || 'fr, en';
+      document.getElementById('setAutoEnabled').checked = s.auto_scan_enabled !== false;
+      document.getElementById('setAutoInterval').value  = s.auto_scan_interval_minutes || 60;
       var pass = document.getElementById('setOsPass');
       pass.value = '';
       pass.placeholder = s.opensubtitles_password_set
         ? '•••• (enregistré — laisser vide pour garder)'
         : 'mot de passe';
-      if (s.movies_dir_exists === false) {
+      var missing = (s.movies_dirs_status || []).filter(function (d) { return !d.exists; });
+      if (missing.length) {
         var st = document.getElementById('setStatus');
         st.className = 'set-status err';
-        st.textContent = '⚠ Le dossier des films actuel est introuvable sur le serveur.';
+        st.textContent = '⚠ Dossier(s) introuvable(s) : ' + missing.map(function (d) { return d.path; }).join(' · ');
       }
     })
     .catch(function () {
@@ -1384,13 +1475,15 @@ function saveSettings() {
   status.textContent = 'Enregistrement…';
 
   var payload = {
-    movies_dir:             document.getElementById('setMoviesDir').value,
+    movies_dirs:            document.getElementById('setMoviesDirs').value,
     tracks_cache_dir:       document.getElementById('setTracksDir').value,
     tmdb_api_key:           document.getElementById('setTmdbKey').value,
     opensubtitles_api_key:  document.getElementById('setOsKey').value,
     opensubtitles_username: document.getElementById('setOsUser').value,
     opensubtitles_langs:    document.getElementById('setOsLangs').value,
     opensubtitles_password: document.getElementById('setOsPass').value,
+    auto_scan_enabled:          document.getElementById('setAutoEnabled').checked,
+    auto_scan_interval_minutes: document.getElementById('setAutoInterval').value,
   };
 
   fetch('/api/settings', {
@@ -1403,9 +1496,10 @@ function saveSettings() {
       btn.disabled = false;
       if (res.status === 'ok') {
         document.getElementById('setOsPass').value = '';
-        if (res.paths_changed && res.movies_dir_exists === false) {
+        var missing = (res.movies_dirs_status || []).filter(function (d) { return !d.exists; });
+        if (res.paths_changed && missing.length) {
           status.className = 'set-status err';
-          status.textContent = '✓ Enregistré, mais le dossier des films est introuvable.';
+          status.textContent = '✓ Enregistré, mais introuvable : ' + missing.map(function (d) { return d.path; }).join(' · ');
         } else {
           status.className = 'set-status ok';
           status.textContent = res.paths_changed

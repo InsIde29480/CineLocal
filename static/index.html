@@ -12,7 +12,7 @@
     href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@300;400&display=swap"
     rel="stylesheet" />
 
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=10" />
 </head>
 
 <body>
@@ -27,8 +27,8 @@
     </div>
     <div class="nav-right">
       <div class="mode-toggle" id="modeToggle">
-        <!-- <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button> -->
-        <!-- <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button> -->
+        <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button>
+        <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button>
         <!-- <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button> -->
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
@@ -202,14 +202,14 @@
         <div class="set-group">
           <div class="set-group-title">📁 Chemins</div>
           <label class="set-field">
-            <span class="set-label">Dossier des films</span>
-            <input type="text" id="setMoviesDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/home/pi/storage/6TO/Films">
+            <span class="set-label">Dossiers des films — un par ligne</span>
+            <textarea id="setMoviesDirs" class="set-input set-textarea" autocomplete="off" spellcheck="false" rows="3" placeholder="/home/pi/storage/6TO/Films&#10;/media/usb-disk2/Films"></textarea>
           </label>
           <label class="set-field">
             <span class="set-label">Dossier des sous-titres (cache)</span>
             <input type="text" id="setTracksDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/home/pi/storage/6TO/.tracks_cache">
           </label>
-          <div class="set-hint">Chemins absolus sur le serveur. Changer le dossier des films relance l'analyse de la bibliothèque.</div>
+          <div class="set-hint">Chemins absolus sur le serveur, même structure <code>Films/&lt;catégorie&gt;/…</code>. Tu peux ajouter plusieurs disques/dossiers (un par ligne) ; ils sont scannés ensemble. Un changement relance l'analyse de la bibliothèque.</div>
         </div>
 
         <div class="set-group">
@@ -242,6 +242,19 @@
           <div class="set-hint">Compte gratuit sur opensubtitles.com, puis /consumers pour la clé API. Ordre = priorité (fr d'abord).</div>
         </div>
 
+        <div class="set-group">
+          <div class="set-group-title">🔁 Analyse automatique</div>
+          <label class="set-check">
+            <input type="checkbox" id="setAutoEnabled">
+            <span>Analyser périodiquement (nouveaux films → extraction → téléchargement FR)</span>
+          </label>
+          <label class="set-field">
+            <span class="set-label">Intervalle (minutes)</span>
+            <input type="number" id="setAutoInterval" class="set-input" min="5" step="5" placeholder="60">
+          </label>
+          <div class="set-hint">Détecte les films ajoutés, extrait leurs sous-titres et télécharge le français manquant. Minimum 5 min.</div>
+        </div>
+
         <div class="set-status" id="setStatus"></div>
       </div>
 
@@ -270,12 +283,13 @@
         <div class="fiche-title" id="ficheTitle"></div>
         <div class="fiche-meta" id="ficheMeta"></div>
         <div class="fiche-overview" id="ficheOverview"></div>
+        <div class="fiche-versions" id="ficheVersions"></div>
         <div class="fiche-subs" id="ficheSubs"></div>
         <div class="fiche-buttons" id="ficheButtons"></div>
       </div>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>
