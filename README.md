@@ -14,7 +14,6 @@ et trois modes de lecture : navigateur, Chromecast, et sortie HDMI directe.
 - **Trois modes de lecture** au choix :
   -  **PC** — lecture dans le navigateur (lecteur HTML5)
   -  **Chromecast** — diffusion sur la TV via un Chromecast
-  -  **TV directe** — lecture sur la sortie HDMI de la machine (via MPV)
 - **Sélection de la piste audio** et des **sous-titres** avant lecture
 - **Extraction automatique** des sous-titres internes (SRT/ASS) en VTT, et
   détection des sous-titres externes (`.srt` / `.vtt`) à côté du fichier
@@ -152,19 +151,6 @@ envoyés nativement au Chromecast.
 
 ---
 
-## Lecture sur TV directe (MPV)
-
-Le mode **TV directe** lance la lecture sur la sortie HDMI de la machine serveur
-via MPV, en plein écran, avec la piste audio et les sous-titres choisis.
-
-- Nécessite **MPV installé** (`sudo apt install mpv`)
-- Nécessite un environnement graphique actif (voir variables `DISPLAY` /
-  `XAUTHORITY` dans le service systemd)
-- Idéal pour les fichiers **HEVC 4K** sur une machine au décodeur matériel compatible
-  (ex. Raspberry Pi 5), qui les lit sans transcodage et en pleine qualité
-
----
-
 ## Conversion des films
 
 `convert.ps1` (Windows / PowerShell) utilise ffmpeg pour préparer les films au
@@ -227,10 +213,6 @@ Le décodage dépend de **qui** lit le fichier :
 - **Mode PC** : c'est l'ordinateur client qui décode → tout format passe.
 - **Mode Chromecast** : le Chromecast décode → H.264 1080p uniquement (le serveur
   transcode le reste, ce qui est lourd pour une petite machine).
-- **Mode TV directe** : la machine serveur décode →
-  - **HEVC 4K** : OK sur une machine au décodeur matériel HEVC (ex. Raspberry Pi 5)
-  - **H.264 4K** : souvent injouable sur Raspberry Pi (pas de décodeur H.264 matériel,
-    le CPU ne suit pas) → convertir en 1080p avec `convert.ps1`
 
 **En résumé** : gardez vos **HEVC** tels quels pour la TV directe, et convertissez les
 **H.264 4K** (ou tout ce qui doit passer par le Chromecast) en 1080p H.264.
