@@ -2,7 +2,7 @@
 
 Serveur personnel de films et séries en local, façon Netflix, avec posters
 automatiques, détection des séries, sélection des pistes audio / sous-titres,
-et trois modes de lecture : navigateur, Chromecast, et sortie HDMI directe.
+et Deux modes de lecture : navigateur, Chromecast.
 
 ---
 
@@ -11,12 +11,27 @@ et trois modes de lecture : navigateur, Chromecast, et sortie HDMI directe.
 - **Interface web** type Netflix (catalogue, recherche, fiche série/épisodes)
 - **Affiches et synopsis** récupérés automatiquement via TMDB
 - **Détection automatique** des films, séries, saisons et épisodes
-- **Trois modes de lecture** au choix :
+- **Deux modes de lecture** au choix :
   -  **PC** — lecture dans le navigateur (lecteur HTML5)
   -  **Chromecast** — diffusion sur la TV via un Chromecast
 - **Sélection de la piste audio** et des **sous-titres** avant lecture
+- **Choix de la version** (4K / 1080p / HD) à la lecture — pour les **films**
+  comme pour les **épisodes de séries** (fichiers regroupés par qualité)
 - **Extraction automatique** des sous-titres internes (SRT/ASS) en VTT, et
   détection des sous-titres externes (`.srt` / `.vtt`) à côté du fichier
+- **Extraction en masse** de tous les sous-titres avec **fenêtre de progression**
+  (fichier en cours, total, échecs détaillés, films sans sous-titre)
+- **Téléchargement automatique** des sous-titres **français** manquants via
+  **OpenSubtitles** (appariement par empreinte du fichier ou identifiant TMDB)
+- **Sous-titres partagés** entre les versions d'un même film/épisode (HD ↔ 4K)
+- **Resynchronisation des sous-titres** décalés directement depuis l'interface
+  (décalage ± en secondes, films et épisodes)
+- **Analyse automatique périodique** : détecte les nouveaux films, extrait les
+  sous-titres et télécharge le français manquant, à intervalle réglable
+- **Onglet Paramètres** : toute la configuration (clés API, dossiers, langues,
+  analyse auto) se règle **depuis le site**, sans éditer les fichiers
+- **Plusieurs dossiers de films** (multi-disques) scannés ensemble
+- **Durée des films**, **badge 4K** et **tri alphabétique** du catalogue
 - **Mise en cache** des posters et des pistes pour un affichage rapide
 
 ---
@@ -83,17 +98,24 @@ Depuis un autre appareil du réseau → **http://&lt;ip-du-serveur&gt;:8765**
 
 ```
 cinelocal/
-├── server.py            # Serveur Flask (API + streaming + transcodage)
+├── server.py                # Serveur Flask (API + streaming + transcodage + sous-titres)
 ├── static/
-│   ├── index.html       # Structure de la page
-│   ├── style.css        # Styles
-│   └── app.js           # Logique front-end
-├── convert.ps1          # Conversion des films (Windows / PowerShell)
-├── check_format.ps1     # Vérification du format (Windows)
-└── check_format.sh      # Vérification du format (Linux)
+│   ├── index.html           # Structure de la page
+│   ├── style.css            # Styles
+│   └── app.js               # Logique front-end
+├── convert_gui.ps1          # IHM de conversion (Windows) — choix GPU/CPU, qualité, résolution
+├── convert.ps1              # Conversion en ligne de commande + downscale 1080p (Windows)
+├── convert_only_format.ps1  # Conversion codec seul, sans downscale (Windows)
+├── check.ps1                # Vérification du format (Windows)
+└── check.sh                 # Vérification du format (Linux)
 ```
 
 Les fichiers `style.css` et `app.js` sont servis automatiquement depuis `static/`.
+
+> Fichiers générés au premier lancement (à côté du dossier de films ou dans le
+> répertoire configuré) : `.tracks_cache/` (sous-titres VTT + métadonnées),
+> `.tmdb_cache.json` (posters/synopsis), `.cinelocal_settings.json` (paramètres
+> réglés depuis l'interface).
 
 ---
 
@@ -106,18 +128,78 @@ Les sous-titres externes sont détectés s'ils portent le **même nom** que la v
 
 ## Configuration
 
-Variables en tête de `server.py` :
+La plupart des réglages se font **directement depuis l'onglet ⚙ Paramètres du
+site** (voir [Paramètres](#paramètres-interface-web)) et sont enregistrés dans
+`.cinelocal_settings.json` — plus besoin d'éditer `server.py`. Les valeurs en
+tête de `server.py` servent alors de **valeurs par défaut**.
 
-| Variable        | Défaut          | Description                          |
-|-----------------|-----------------|--------------------------------------|
-| `MOVIES_DIR`    | `~/nvme_data`   | Dossier source des films             |
-| `PORT`          | `8765`          | Port du serveur                      |
-| `HOST`          | `0.0.0.0`       | `0.0.0.0` = accessible sur le réseau |
-| `TMDB_API_KEY`  | *(à remplir)*   | Clé API TMDB (posters / synopsis)    |
-| `SUBS_LANG_OK`  | `fr`, `en`, …   | Langues de sous-titres à extraire    |
+| Réglage (Paramètres / `server.py`) | Défaut          | Description                          |
+|------------------------------------|-----------------|--------------------------------------|
+| Dossiers des films                 | *(à définir)*   | Un ou **plusieurs** dossiers, même structure `Films/…` |
+| Dossier des sous-titres (cache)    | `.tracks_cache` | Où sont stockés les VTT + métadonnées |
+| Clé API TMDB                       | *(à remplir)*   | Posters / synopsis                   |
+| OpenSubtitles (clé, identifiant, mot de passe, langues) | *(vide)* | Téléchargement des sous-titres manquants |
+| Analyse automatique (activée + intervalle) | `oui`, `60 min` | Détection/extraction/téléchargement périodiques |
+| `PORT`                             | `8765`          | Port du serveur (`server.py`)        |
+| `HOST`                             | `0.0.0.0`       | `0.0.0.0` = accessible sur le réseau |
+| `SUBS_ACCEPT_ALL_LANGS`            | `True`          | Extrait toutes les langues de sous-titres (`server.py`) |
 
-> Le filtre `SUBS_LANG_OK` évite d'extraire des dizaines de pistes de sous-titres
-> inutiles : seules les langues listées (français / anglais par défaut) sont traitées.
+> Par défaut, **toutes** les langues de sous-titres texte sont extraites (on
+> choisit ensuite dans l'interface). Mettre `SUBS_ACCEPT_ALL_LANGS = False` dans
+> `server.py` pour se limiter à la liste `SUBS_LANG_OK` (fr / en).
+>
+> Les identifiants sont stockés localement dans `.cinelocal_settings.json` ; le
+> mot de passe OpenSubtitles n'est jamais renvoyé au navigateur.
+
+---
+
+## Paramètres (interface web)
+
+Le bouton **⚙ Paramètres** (barre de navigation) ouvre une fenêtre pour tout
+configurer sans toucher aux fichiers :
+
+- **📁 Chemins** — un ou plusieurs **dossiers de films** (un par ligne, plusieurs
+  disques possibles) et le **dossier de cache** des sous-titres. Un changement
+  relance automatiquement l'analyse de la bibliothèque.
+- **🎬 TMDB** — clé API pour les affiches et synopsis.
+- **💬 OpenSubtitles** — clé API, identifiant, mot de passe et ordre des langues
+  (`fr, en`) pour le téléchargement des sous-titres.
+- **🔁 Analyse automatique** — activer/désactiver et régler l'intervalle (min. 5 min).
+- **🛠️ Outils** — accès à la **resynchronisation des sous-titres** (voir ci-dessous).
+
+Tout est enregistré côté serveur et rechargé au démarrage.
+
+---
+
+## Sous-titres (extraction, téléchargement, resynchronisation)
+
+Le bouton **💬 Sous-titres** ouvre la fenêtre de gestion :
+
+- **Extraction en masse** : parcourt tous les films/épisodes et extrait leurs
+  sous-titres en VTT (toutes les pistes d'un fichier sont extraites **en une
+  seule passe**, indispensable pour les gros remux 4K). Une **barre de
+  progression** montre le fichier en cours, le total, et deux listes
+  dépliables : **films sans sous-titre** (avec la raison : image/PGS, aucune
+  piste…) et **échecs** (avec le détail).
+- **Reprise ciblée** : *Réessayer les échecs & sans S-T* (ne retraite que ce qui
+  manque), ou *Tout ré-extraire*.
+- **Téléchargement du français manquant** : *Télécharger le français manquant*
+  interroge OpenSubtitles pour tout film/épisode sans piste FR (même s'il a déjà
+  de l'anglais), enregistre un `.srt` à côté de la vidéo et le convertit.
+- **Analyse automatique** (réglable dans les Paramètres) : refait ce cycle
+  périodiquement pour les nouveaux fichiers.
+
+> Le cache utilise un **identifiant MD5 stable** par fichier : il **survit à un
+> redémarrage** du service (`systemctl restart`) — seuls les fichiers nouveaux ou
+> modifiés sont ré-extraits. L'extraction n'est jamais interrompue par un plafond
+> de temps total, seulement en cas d'**inactivité prolongée** (fichier bloqué).
+
+### Resynchroniser un sous-titre décalé
+
+**⚙ Paramètres → 🛠️ Outils → Resynchroniser des sous-titres décalés** : recherche
+un film/épisode, choisis la langue, puis **avance ou retarde** les timecodes de X
+secondes (décimales acceptées, ex. `1.05`). Le décalage s'applique au sous-titre
+servi (et au `.srt` source pour les externes). Ré-applique pour affiner.
 
 ---
 
@@ -153,9 +235,32 @@ envoyés nativement au Chromecast.
 
 ## Conversion des films
 
-`convert.ps1` (Windows / PowerShell) utilise ffmpeg pour préparer les films au
-format compatible Chromecast : **H.264 + AAC-LC stéréo**, downscale des **4K en
-1080p**, et **tonemapping HDR → SDR**.
+Trois outils Windows (ffmpeg requis dans le PATH) pour préparer les films au
+format compatible Chromecast : **H.264 + AAC-LC stéréo**, downscale **4K → 1080p**.
+
+### Interface graphique — `convert_gui.ps1` (recommandé)
+
+Une **fenêtre** (aucune installation, WinForms intégré à Windows) pour tout piloter
+sans éditer de script :
+
+- choix du **dossier**, scan et liste des fichiers (codec, résolution, statut) ;
+- **encodeur** : NVIDIA / Intel / AMD (GPU) ou CPU (libx264) ;
+- **qualité** (CRF/CQ) et **résolution max** (1080p / 720p / aucune limite) ;
+- **audio** : AAC stéréo (Chromecast) ou copie si déjà compatible ;
+- sélection multiple, **barre de progression + ETA**, bouton **Annuler**.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\convert_gui.ps1
+```
+
+> ⚠️ « Aucune limite » sur une source 4K produit un **H.264 4K** très lourd et
+> souvent injouable sur le Raspberry Pi. Pour le Pi/Chromecast, garde **1080p**.
+
+### En ligne de commande — `convert.ps1` / `convert_only_format.ps1`
+
+`convert.ps1` prépare au format Chromecast et **downscale les 4K en 1080p**.
+`convert_only_format.ps1` ne change **que le codec** (sans downscale), utile pour
+garder la résolution d'origine.
 
 Autoriser l'exécution de scripts pour la session :
 
@@ -175,7 +280,7 @@ audio non compatible, ou résolution > 1080p), et permet d'en sélectionner.
 ### Sécurité
 
 - Le script **ne supprime jamais** vos fichiers vidéo.
-- La sortie est toujours un **nouveau fichier** `<nom>_conv.mkv`.
+- La sortie est toujours un **nouveau fichier** `<nom>_out.mkv`.
 - Une conversion n'est validée que si ffmpeg réussit **et** que le fichier produit
   a une taille cohérente ; sinon le résultat partiel est jeté et l'original reste intact.
 - Les anciens fichiers se suppriment **manuellement**, après vérification.
@@ -196,12 +301,12 @@ audio non compatible, ou résolution > 1080p), et permet d'en sélectionner.
 ### Vérification du format
 
 ```powershell
-.\check_format.ps1      # Windows
+.\check.ps1      # Windows
 ```
 
 ```bash
-chmod +x check_format.sh
-./check_format.sh        # Linux
+chmod +x check.sh
+./check.sh        # Linux
 ```
 
 ---
@@ -213,6 +318,10 @@ Le décodage dépend de **qui** lit le fichier :
 - **Mode PC** : c'est l'ordinateur client qui décode → tout format passe.
 - **Mode Chromecast** : le Chromecast décode → H.264 1080p uniquement (le serveur
   transcode le reste, ce qui est lourd pour une petite machine).
+- **Mode TV directe** : la machine serveur décode →
+  - **HEVC 4K** : OK sur une machine au décodeur matériel HEVC (ex. Raspberry Pi 5)
+  - **H.264 4K** : souvent injouable sur Raspberry Pi (pas de décodeur H.264 matériel,
+    le CPU ne suit pas) → convertir en 1080p avec `convert.ps1`
 
 **En résumé** : gardez vos **HEVC** tels quels pour la TV directe, et convertissez les
 **H.264 4K** (ou tout ce qui doit passer par le Chromecast) en 1080p H.264.
@@ -284,15 +393,24 @@ que l'ordinateur et le Chromecast sont sur le **même réseau WiFi**.
 Forcez le rechargement sans cache : `Ctrl + Shift + R`.
 
 **Sous-titres décalés**
-Vérifiez que le `.srt` correspond au **framerate** du film (souvent 23.976 fps pour
-les Blu-ray). Outil recommandé : Subtitle Edit (resync, changement de framerate, OCR).
+Utilisez l'outil intégré : **⚙ Paramètres → 🛠️ Outils → Resynchroniser des
+sous-titres décalés** (avance/retarde de X secondes). Pour un décalage qui
+s'aggrave au fil du film, c'est un problème de **framerate** (souvent 23.976 fps
+pour les Blu-ray) : Subtitle Edit permet le changement de framerate et l'OCR.
 
 **Image saccadée / muette sur le Chromecast**
 Le fichier est probablement HEVC, 4K, 10-bit ou en HE-AAC/5.1 → convertissez-le en
 H.264 1080p AAC stéréo avec `convert.ps1`.
 
-**Re-extraire les sous-titres après changement de filtre de langue**
-Videz le cache : `rm -rf .tracks_cache/` puis redémarrez le serveur.
+**Re-extraire les sous-titres (changement de langue, encodage, etc.)**
+Depuis l'interface : **💬 Sous-titres → Tout ré-extraire** (ou *Réessayer les
+échecs & sans S-T*). Sinon, videz le cache `rm -rf .tracks_cache/` puis
+redémarrez le serveur.
+
+**Mojibake dans les sous-titres (accents `Ã©`, `�`)**
+Les `.srt` non-UTF-8 (Windows-1252 / Latin-1) sont désormais détectés et
+convertis automatiquement. Relancez **💬 Sous-titres → Tout ré-extraire** pour
+régénérer les anciens sous-titres avec le bon encodage.
 
 ---
 

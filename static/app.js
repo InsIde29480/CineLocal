@@ -787,6 +787,31 @@ function toggleWatched(id) {
   updateSeriesMeta();
 }
 
+// Un épisode peut avoir plusieurs versions (4K/HD) : « vu » vaut pour n'importe
+// laquelle. On considère donc tous les ids de ses variantes.
+function _episodeIds(ep) {
+  var ids = [ep.id];
+  (ep.qualities || []).forEach(function (q) { if (ids.indexOf(q.id) < 0) ids.push(q.id); });
+  return ids;
+}
+
+function isEpisodeWatched(ep) {
+  var map = getWatchedMap();
+  return _episodeIds(ep).some(function (id) { return !!map[id]; });
+}
+
+function toggleEpisodeWatched(episodeId) {
+  if (!currentSeries) return;
+  var ep = currentSeries.episodes.find(function (e) { return e.id === episodeId; });
+  if (!ep) return;
+  var map = getWatchedMap();
+  if (isEpisodeWatched(ep)) _episodeIds(ep).forEach(function (id) { delete map[id]; });
+  else                      map[ep.id] = true;
+  localStorage.setItem('cinelocal-watched', JSON.stringify(map));
+  renderEpisodes();
+  updateSeriesMeta();
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // FICHE FILM (style Netflix, données TMDB)
 // ═══════════════════════════════════════════════════════════════════
@@ -1050,7 +1075,7 @@ function selectSeason(season) {
 
 function updateSeriesMeta() {
   if (!currentSeries) return;
-  var watchedCount = currentSeries.episodes.filter(function (e) { return isWatched(e.id); }).length;
+  var watchedCount = currentSeries.episodes.filter(function (e) { return isEpisodeWatched(e); }).length;
   document.getElementById('seriesModalMeta').textContent =
     currentSeries.season_count + ' saison' + (currentSeries.season_count > 1 ? 's' : '') +
     ' · ' + currentSeries.episode_count + ' épisodes' +
@@ -1064,18 +1089,24 @@ function renderEpisodes() {
 
   // Prochain épisode à voir : premier non vu de toute la série
   // (les épisodes sont déjà triés saison/épisode côté serveur).
-  var nextEp = currentSeries.episodes.find(function (e) { return !isWatched(e.id); });
+  var nextEp = currentSeries.episodes.find(function (e) { return !isEpisodeWatched(e); });
   var nextId = nextEp ? nextEp.id : null;
 
   document.getElementById('episodesList').innerHTML = eps.map(function (ep) {
-    var watched = isWatched(ep.id);
+    var watched = isEpisodeWatched(ep);
     var nextTag = (ep.id === nextId) ? '<span class="ep-next-tag">À suivre</span>' : '';
+    // Badge « versions » quand l'épisode existe en plusieurs qualités (4K/HD).
+    var versTag = '';
+    if (ep.qualities && ep.qualities.length > 1) {
+      var has4k = ep.qualities.some(function (q) { return (q.height || 0) >= 2160; });
+      versTag = '<span class="ep-vers-tag">' + (has4k ? '4K/HD' : ep.qualities.length + ' versions') + '</span>';
+    }
     return '<div class="episode-row' + (watched ? ' watched' : '') + '" onclick="playEpisode(\'' + ep.id + '\')">'
       + '<button class="ep-check' + (watched ? ' watched' : '') + '" title="' + (watched ? 'Marquer non vu' : 'Marquer vu') + '"'
-      + ' onclick="event.stopPropagation();toggleWatched(\'' + ep.id + '\')">✓</button>'
+      + ' onclick="event.stopPropagation();toggleEpisodeWatched(\'' + ep.id + '\')">✓</button>'
       + '<div class="episode-num">E' + String(ep.episode).padStart(2, '0') + '</div>'
       + '<div class="episode-info">'
-      + '<div class="episode-title">Épisode ' + ep.episode + nextTag + '</div>'
+      + '<div class="episode-title">Épisode ' + ep.episode + nextTag + versTag + '</div>'
       + '<div class="episode-meta">' + ep.size_mb + ' Mo · ' + ep.ext.replace('.', '').toUpperCase()
       + (watched ? ' · <span class="ep-seen">✓ vu</span>' : '') + '</div>'
       + '</div>'
@@ -1093,9 +1124,13 @@ function playEpisode(episodeId) {
     year: null,
     poster: currentSeries.poster,
   });
+  var multiQuality = ep.qualities && ep.qualities.length > 1;
   closeSeriesModal();
+  // Cast / TV : la modale d'options propose déjà le choix de la qualité.
   if (currentMode === 'tv')         openOptions(fakeMovie, 'cast');
   else if (currentMode === 'local') openOptions(fakeMovie, 'local');
+  // PC : s'il y a plusieurs versions (4K / HD), on ouvre le choix ; sinon lecture directe.
+  else if (multiQuality)            openOptions(fakeMovie, 'pc');
   else                              playPc(fakeMovie, 0, null);
 }
 
@@ -1521,6 +1556,130 @@ function saveSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// RESYNCHRONISATION DES SOUS-TITRES (décalage des timecodes)
+// ═══════════════════════════════════════════════════════════════════
+var _syncCatalog  = [];
+var _syncSelected = null;
+var _syncDir      = 1;   // 1 = retarder (+), -1 = avancer (−)
+
+function openSubSyncModal() {
+  closeSettingsModal();
+  document.getElementById('subsync-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  _syncSelected = null;
+  document.getElementById('syncSearch').value = '';
+  document.getElementById('syncControls').style.display = 'none';
+  document.getElementById('syncStatus').textContent = '';
+  document.getElementById('syncApplyBtn').disabled = true;
+  document.getElementById('syncSelected').textContent = 'Chargement…';
+  document.getElementById('syncList').innerHTML = '';
+  setSyncDir(1);
+  fetch('/api/subtitles/catalog')
+    .then(function (r) { return r.json(); })
+    .then(function (list) {
+      _syncCatalog = list || [];
+      document.getElementById('syncSelected').textContent = _syncCatalog.length
+        ? 'Aucun sous-titre sélectionné.'
+        : 'Aucun sous-titre en cache — lance d’abord une extraction (💬).';
+      renderSyncList();
+    })
+    .catch(function () {
+      document.getElementById('syncSelected').textContent = 'Serveur injoignable.';
+    });
+}
+
+function closeSubSyncModal() {
+  document.getElementById('subsync-modal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function renderSyncList() {
+  var q = (document.getElementById('syncSearch').value || '').toLowerCase().trim();
+  var el = document.getElementById('syncList');
+  var list = _syncCatalog;
+  if (q) list = list.filter(function (e) { return (e.title + ' ' + e.sub).toLowerCase().indexOf(q) >= 0; });
+  var shown = list.slice(0, 300);
+  if (!shown.length) { el.innerHTML = '<div class="subs-empty-msg">Aucun résultat.</div>'; return; }
+  el.innerHTML = shown.map(function (e) {
+    var id  = e.movie_id + ':' + e.idx;
+    var sel = (_syncSelected && (_syncSelected.movie_id + ':' + _syncSelected.idx) === id) ? ' active' : '';
+    return '<button class="sync-row' + sel + '" onclick="selectSyncSub(\'' + e.movie_id + '\',' + e.idx + ')">'
+      + '<span class="sync-row-title">' + escHtml(e.title) + '</span>'
+      + '<span class="sync-row-sub">' + escHtml(e.sub) + '</span></button>';
+  }).join('') + (list.length > shown.length
+    ? '<div class="subs-empty-msg">… ' + (list.length - shown.length) + ' de plus, affine la recherche.</div>'
+    : '');
+}
+
+function selectSyncSub(movieId, idx) {
+  _syncSelected = _syncCatalog.find(function (e) { return e.movie_id === movieId && e.idx === idx; }) || null;
+  renderSyncList();
+  if (!_syncSelected) return;
+  document.getElementById('syncSelected').innerHTML =
+    '▶ ' + escHtml(_syncSelected.title) + ' — <b>' + escHtml(_syncSelected.sub) + '</b>';
+  document.getElementById('syncControls').style.display = '';
+  document.getElementById('syncApplyBtn').disabled = false;
+  document.getElementById('syncStatus').textContent = '';
+  updateSyncPreview();
+}
+
+function setSyncDir(d) {
+  _syncDir = d;
+  document.getElementById('syncDirLater').classList.toggle('active', d === 1);
+  document.getElementById('syncDirEarlier').classList.toggle('active', d === -1);
+  updateSyncPreview();
+}
+
+function _syncOffset() {
+  var v = parseFloat(document.getElementById('syncSeconds').value);
+  if (isNaN(v) || v < 0) v = 0;
+  return _syncDir * v;
+}
+
+function updateSyncPreview() {
+  var off = _syncOffset();
+  var el = document.getElementById('syncPreview');
+  if (!off) { el.textContent = 'Entre un nombre de secondes (> 0).'; return; }
+  var s = (off > 0 ? '+' : '') + off;
+  el.textContent = 'Décalage : ' + s + ' s → sous-titres ' + (off > 0 ? 'plus tard' : 'plus tôt');
+}
+
+function applySubShift() {
+  if (!_syncSelected) return;
+  var off = _syncOffset();
+  if (!off) { _setSyncStatus('Entre un nombre de secondes différent de 0.', 'err'); return; }
+  var btn = document.getElementById('syncApplyBtn');
+  btn.disabled = true;
+  _setSyncStatus('Application…', '');
+  fetch('/api/subtitles/shift', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ movie_id: _syncSelected.movie_id, idx: _syncSelected.idx, offset: off }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      btn.disabled = false;
+      if (res.status === 'ok') {
+        var msg = '✓ ' + (off > 0 ? '+' : '') + off + ' s appliqué à ' + (res.shifted || 0) + ' timecode(s)';
+        if (res.source_shifted) msg += ' (+ fichier source ' + escHtml(res.source || '') + ')';
+        msg += '. Relance la lecture pour vérifier ; ré-applique pour affiner.';
+        _setSyncStatus(msg, 'ok');
+      } else {
+        _setSyncStatus('✗ ' + (res.message || 'échec'), 'err');
+      }
+    })
+    .catch(function () {
+      btn.disabled = false;
+      _setSyncStatus('✗ Serveur injoignable.', 'err');
+    });
+}
+
+function _setSyncStatus(msg, cls) {
+  var el = document.getElementById('syncStatus');
+  el.className = 'set-status' + (cls ? ' ' + cls : '');
+  el.textContent = msg;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // UTILITAIRE
 // ═══════════════════════════════════════════════════════════════════
 function escHtml(s) {
@@ -1549,8 +1708,11 @@ document.getElementById('subs-modal').addEventListener('click', function (e) {
 document.getElementById('settings-modal').addEventListener('click', function (e) {
   if (e.target === document.getElementById('settings-modal')) closeSettingsModal();
 });
+document.getElementById('subsync-modal').addEventListener('click', function (e) {
+  if (e.target === document.getElementById('subsync-modal')) closeSubSyncModal();
+});
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); closeMovieModal(); closeSubsModal(); closeSettingsModal(); }
+  if (e.key === 'Escape') { closePlayer(); closeSeriesModal(); closeCastOptions(); closeMovieModal(); closeSubsModal(); closeSettingsModal(); closeSubSyncModal(); }
 });
 
 setMode(currentMode);

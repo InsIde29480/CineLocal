@@ -12,7 +12,7 @@
     href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@300;400&display=swap"
     rel="stylesheet" />
 
-  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <link rel="stylesheet" href="/static/style.css?v=13" />
 </head>
 
 <body>
@@ -255,6 +255,14 @@
           <div class="set-hint">Détecte les films ajoutés, extrait leurs sous-titres et télécharge le français manquant. Minimum 5 min.</div>
         </div>
 
+        <div class="set-group">
+          <div class="set-group-title">🛠️ Outils</div>
+          <button class="btn-cast-launch subs-force" style="width:100%;justify-content:center" onclick="openSubSyncModal()">
+            <span>🕐 Resynchroniser des sous-titres décalés</span>
+          </button>
+          <div class="set-hint">Avancer ou retarder les timecodes d'un sous-titre (film ou épisode) de quelques secondes.</div>
+        </div>
+
         <div class="set-status" id="setStatus"></div>
       </div>
 
@@ -262,6 +270,56 @@
         <button class="btn-cast-cancel" onclick="closeSettingsModal()">Fermer</button>
         <button class="btn-cast-launch" id="setSaveBtn" onclick="saveSettings()">
           <span>💾 Enregistrer</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL RESYNCHRONISATION DES SOUS-TITRES -->
+  <div id="subsync-modal">
+    <div class="subs-container">
+      <div class="subs-header">
+        <div>
+          <div class="subs-title">🕐 Resynchroniser les sous-titres</div>
+          <div class="subs-sub">Décale les timecodes d'un sous-titre décalé</div>
+        </div>
+        <button class="icon-btn" onclick="closeSubSyncModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="subs-body">
+        <label class="set-field">
+          <span class="set-label">Rechercher un film / épisode</span>
+          <input type="text" id="syncSearch" class="set-input" autocomplete="off" spellcheck="false" placeholder="titre, saison, épisode…" oninput="renderSyncList()">
+        </label>
+
+        <div class="sync-list" id="syncList"></div>
+
+        <div class="sync-selected" id="syncSelected">Aucun sous-titre sélectionné.</div>
+
+        <div class="sync-controls" id="syncControls" style="display:none">
+          <div class="set-group-title">Décalage</div>
+          <div class="sync-dir">
+            <button class="sync-dir-btn active" id="syncDirLater"  onclick="setSyncDir(1)">＋ Retarder <span>(plus tard)</span></button>
+            <button class="sync-dir-btn"        id="syncDirEarlier" onclick="setSyncDir(-1)">－ Avancer <span>(plus tôt)</span></button>
+          </div>
+          <label class="set-field">
+            <span class="set-label">Secondes (décimales acceptées, ex. 1.05)</span>
+            <input type="number" id="syncSeconds" class="set-input" min="0" step="0.05" value="1" inputmode="decimal" oninput="updateSyncPreview()">
+          </label>
+          <div class="sync-preview" id="syncPreview"></div>
+        </div>
+
+        <div class="set-status" id="syncStatus"></div>
+      </div>
+
+      <div class="subs-footer">
+        <button class="btn-cast-cancel" onclick="closeSubSyncModal()">Fermer</button>
+        <button class="btn-cast-launch" id="syncApplyBtn" onclick="applySubShift()" disabled>
+          <span>🕐 Appliquer le décalage</span>
         </button>
       </div>
     </div>
@@ -290,6 +348,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>

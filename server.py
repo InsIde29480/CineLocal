@@ -203,7 +203,8 @@ def add_cors_headers(response):
     # Interface (HTML/JS/CSS) : jamais de cache long, pour que les mises à jour
     # soient prises en compte immédiatement. Les vidéos ne sont pas concernées.
     p = request.path
-    if p == '/' or p.startswith('/static/'):
+    if p == '/' or p.startswith('/static/') or p.startswith('/track/'):
+        # /track/ inclus : après une resynchro, le VTT modifié doit être rechargé.
         response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
 
@@ -464,6 +465,87 @@ def _run_ffmpeg_subs(cmd: list, vtt_path: Path, idle_timeout: int, label: str):
     return True, None
 
 
+def _run_ffmpeg_multi(cmd: list, out_paths: list, idle_timeout: int, label: str):
+    """
+    Comme _run_ffmpeg_subs, mais pour une commande produisant PLUSIEURS fichiers.
+    Sert à extraire TOUTES les pistes de sous-titres d'un fichier en une SEULE
+    passe (donc une seule lecture du fichier). Crucial pour les gros remux 4K :
+    avant, chaque piste relançait un ffmpeg qui relisait tout le fichier — pour
+    un remux à 15 pistes de langues, ça faisait 15 lectures complètes.
+
+    `idle_timeout` reste un délai d'INACTIVITÉ. Renvoie (ok_global, reason).
+    """
+    last_activity = [time.time()]
+    stderr_tail = []
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+    except Exception as e:
+        return False, str(e)
+
+    def _drain_stdout():
+        try:
+            for _line in proc.stdout:      # lignes de -progress = signe de vie
+                last_activity[0] = time.time()
+        except Exception:
+            pass
+
+    def _drain_stderr():
+        try:
+            for line in proc.stderr:
+                line = line.rstrip()
+                if line:
+                    stderr_tail.append(line)
+                    if len(stderr_tail) > 10:
+                        del stderr_tail[0]
+        except Exception:
+            pass
+
+    t_out = threading.Thread(target=_drain_stdout, daemon=True)
+    t_err = threading.Thread(target=_drain_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    killed_idle = False
+    last_size = -1
+    while True:
+        try:
+            proc.wait(timeout=2)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            total = sum(p.stat().st_size for p in out_paths if p.exists())
+            if total != last_size:
+                last_size = total
+                last_activity[0] = time.time()
+        except Exception:
+            pass
+        if time.time() - last_activity[0] > idle_timeout:
+            killed_idle = True
+            try:
+                proc.kill()
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+            break
+
+    t_out.join(timeout=1)
+    t_err.join(timeout=1)
+
+    if killed_idle:
+        reason = f"Bloqué : aucune progression pendant {idle_timeout}s"
+        print(f"Extraction {label} tuée pour inactivité ({idle_timeout}s)")
+        return False, reason
+    if proc.returncode != 0:
+        tail = stderr_tail[-3:] if stderr_tail else []
+        reason = ' | '.join(tail) if tail else f"ffmpeg code {proc.returncode}"
+        print(f"ffmpeg échec {label} (rc={proc.returncode}): {reason}")
+        return False, reason
+    return True, None
+
+
 # ─── ENCODAGE DES SOUS-TITRES ────────────────────────────────────────────────
 # Beaucoup de .srt (surtout français) sont en Windows-1252 / Latin-1 : lus comme
 # de l'UTF-8, les accents deviennent illisibles (« Ã© », « � »). On détecte donc
@@ -624,6 +706,7 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
         subtitle_tracks = []
         failures = []               # raisons d'échec d'extraction
         skipped  = []               # pistes écartées SANS erreur (image, langue)
+        subs_to_extract = []        # pistes texte à extraire en une seule passe
         audio_idx = 0
         subs_idx = 0
         extraction_complete = True
@@ -651,35 +734,48 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
                     print(msg)
                     skipped.append(msg)
                 elif codec in SUBS_TEXT_CODECS:
-                    vtt_path = cache_dir / f"subs_{subs_idx}.vtt"
-                    ok, reason = _run_ffmpeg_subs(
-                        [
-                            "ffmpeg", "-y", "-i", str(filepath),
-                            "-map", f"0:s:{subs_idx}",
-                            "-c:s", "webvtt",
-                            str(vtt_path),
-                        ],
-                        vtt_path,
-                        SUBS_TIMEOUT_EMBEDDED,
-                        f"sous-titres {subs_idx} ({lang})",
-                    )
-                    if ok:
-                        subtitle_tracks.append({
-                            "index":    subs_idx,
-                            "language": lang,
-                            "label":    title or _lang_label(lang),
-                            "url":      f"/track/subs/{movie_id}/{subs_idx}",
-                        })
-                        print(f"Sous-titres {lang} : {title or codec}")
-                    else:
-                        extraction_complete = False
-                        failures.append(f"Piste {_lang_label(lang)} ({codec}) : {reason}")
+                    # On ne lance PAS ffmpeg tout de suite : on collecte les pistes
+                    # texte pour tout extraire en une seule passe (voir plus bas).
+                    subs_to_extract.append({
+                        "subs_idx": subs_idx,
+                        "lang":     lang,
+                        "title":    title,
+                        "codec":    codec,
+                        "vtt":      cache_dir / f"subs_{subs_idx}.vtt",
+                    })
                 else:
                     msg = (f"Piste {subs_idx} « {_lang_label(lang)} » image "
                            f"({codec or 'inconnu'}) ignorée — non convertible en texte (OCR requis)")
                     print(msg)
                     skipped.append(msg)
                 subs_idx += 1
+
+        # ── Extraction de TOUTES les pistes texte en UNE SEULE passe ──────────
+        # (une seule lecture du fichier, au lieu d'une par piste). Décisif sur
+        # les gros remux 4K à nombreuses langues.
+        if subs_to_extract:
+            cmd = ["ffmpeg", "-y", "-hide_banner", "-progress", "pipe:1",
+                   "-i", str(filepath)]
+            for t in subs_to_extract:
+                cmd += ["-map", f"0:s:{t['subs_idx']}", "-c:s", "webvtt", str(t["vtt"])]
+            print(f"Extraction {len(subs_to_extract)} sous-titre(s) en une passe : {movie['filename']}")
+            _ok_all, reason = _run_ffmpeg_multi(
+                cmd, [t["vtt"] for t in subs_to_extract],
+                SUBS_TIMEOUT_EMBEDDED,
+                f"{len(subs_to_extract)} sous-titre(s) {movie['filename']}",
+            )
+            for t in subs_to_extract:
+                if t["vtt"].exists() and t["vtt"].stat().st_size > 0:
+                    subtitle_tracks.append({
+                        "index":    t["subs_idx"],
+                        "language": t["lang"],
+                        "label":    t["title"] or _lang_label(t["lang"]),
+                        "url":      f"/track/subs/{movie_id}/{t['subs_idx']}",
+                    })
+                else:
+                    extraction_complete = False
+                    _safe_remove(t["vtt"])
+                    failures.append(f"Piste {_lang_label(t['lang'])} ({t['codec']}) : {reason or 'sortie vide'}")
 
         # Sous-titres externes
         movie_dir = Path(filepath).parent
@@ -705,6 +801,7 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
                         "language": lang,
                         "label":    f"{_lang_label(lang)} (externe)",
                         "url":      f"/track/subs/{movie_id}/{external_idx}",
+                        "source":   str(sub_file),
                     })
                     print(f"Sous-titres externes : {sub_file.name} ({lang})")
                     subs_idx += 1
@@ -728,6 +825,7 @@ def extract_tracks(movie: dict, force: bool = False) -> dict:
                         "language": "und",
                         "label":    "Sous-titres (externe)",
                         "url":      f"/track/subs/{movie_id}/{external_idx}",
+                        "source":   str(simple_sub),
                     })
                     print(f"Sous-titres externes : {simple_sub.name}")
                     subs_idx += 1
@@ -825,6 +923,83 @@ def _with_duration(movie: dict, data: dict) -> dict:
     except Exception:
         pass
     return data
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RESYNCHRONISATION DES SOUS-TITRES (décalage des timecodes)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Timecode SRT/VTT. Les heures sont OPTIONNELLES : ffmpeg écrit souvent la
+# forme courte WebVTT « MM:SS.mmm » pour les temps < 1 h (ex. 00:32.448).
+# On accepte donc HH:MM:SS[.,]mmm ET MM:SS[.,]mmm.
+_TS_RE = re.compile(r'(?:(\d+):)?([0-5]?\d):([0-5]\d)([.,])(\d{3})')
+
+
+def _shift_ts(m, offset_sec: float) -> str:
+    h  = int(m.group(1)) if m.group(1) else 0
+    total = (h * 3600000 + int(m.group(2)) * 60000
+             + int(m.group(3)) * 1000 + int(m.group(5))
+             + int(round(offset_sec * 1000)))
+    if total < 0:
+        total = 0
+    h, rem = divmod(total, 3600000)
+    mm, rem = divmod(rem, 60000)
+    ss, ms = divmod(rem, 1000)
+    return f"{h:02d}:{mm:02d}:{ss:02d}{m.group(4)}{ms:03d}"
+
+
+def shift_subtitle_file(path: Path, offset_sec: float) -> int:
+    """
+    Décale TOUS les timecodes d'un fichier VTT/SRT de `offset_sec` (± décimal).
+    Renvoie le nombre de timecodes décalés, ou -1 en cas d'erreur.
+    """
+    try:
+        text = _decode_subtitle_bytes(path.read_bytes())
+        shifted, n = _TS_RE.subn(lambda m: _shift_ts(m, offset_sec), text)
+        if n > 0:
+            path.write_text(shifted, encoding="utf-8")
+        return n
+    except Exception as e:
+        print(f"Décalage sous-titre échoué ({path.name}) : {e}")
+        return -1
+
+
+def _find_external_source(video_path: str, language: str):
+    """Retrouve le fichier de sous-titre externe (.srt/.vtt) à côté de la vidéo."""
+    p = Path(video_path)
+    stem, d = p.stem, p.parent
+    cands = []
+    if language and language != "und":
+        cands += [d / f"{stem}.{language}.srt", d / f"{stem}.{language}.vtt"]
+    cands += [d / f"{stem}.srt", d / f"{stem}.vtt"]
+    for c in cands:
+        if c.exists():
+            return c
+    return None
+
+
+def _collect_subs_for_ids(ids: list) -> list:
+    """Sous-titres (depuis le cache) pour un ensemble d'ids de fichiers, dédoublonnés."""
+    out, seen = [], set()
+    for mid in ids:
+        meta = _read_cached_meta(mid)
+        if not meta:
+            continue
+        for t in meta.get("subtitle_tracks", []):
+            key = (t.get("language"), t.get("label"))
+            if key in seen:
+                continue
+            vtt = TRACKS_CACHE_DIR / mid / f"subs_{t.get('index')}.vtt"
+            if not vtt.exists():
+                continue
+            seen.add(key)
+            out.append({
+                "movie_id": mid,
+                "idx":      t.get("index"),
+                "label":    t.get("label") or _lang_label(t.get("language")),
+                "language": t.get("language"),
+            })
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1234,22 +1409,27 @@ def scan_movies() -> list:
 
         if ep:
             stitle = series_title(filepath.name)
-            # Plus de séparation par langue/appareil : tous les épisodes
-            # d'une même série sont regroupés ensemble.
+            qlabel, qheight = detect_quality(filepath.name)
+            # Tous les épisodes d'une série sont regroupés ; à l'intérieur, les
+            # fichiers d'un même épisode (S01E01) sont regroupés comme variantes
+            # de qualité (4K / HD), exactement comme les films.
             group_key = stitle
-            episode_data = {
+            ep_variant = {
                 **common,
-                "season":  ep["season"],
-                "episode": ep["episode"],
-                "title":   f"S{ep['season']:02d}E{ep['episode']:02d}",
+                "season":         ep["season"],
+                "episode":        ep["episode"],
+                "quality":        qlabel,
+                "quality_height": qheight,
+                "title":          f"S{ep['season']:02d}E{ep['episode']:02d}",
             }
-            playable[movie_id] = episode_data
+            playable[movie_id] = ep_variant
             if group_key not in series_groups:
                 series_groups[group_key] = {
                     "stitle": stitle, "category": category,
-                    "episodes": [],
+                    "ep_variants": {},
                 }
-            series_groups[group_key]["episodes"].append(episode_data)
+            ep_key = (ep["season"], ep["episode"])
+            series_groups[group_key]["ep_variants"].setdefault(ep_key, []).append(ep_variant)
         else:
             title = clean_title(filepath.name)
             year  = extract_year(filepath.name)
@@ -1307,18 +1487,46 @@ def scan_movies() -> list:
 
     for group_key, group in series_groups.items():
         series_id = stable_group_id(group_key)
-        group["episodes"].sort(key=lambda e: (e["season"], e["episode"]))
+        episodes = []
+        for ep_key, variants in group["ep_variants"].items():
+            # Meilleure qualité en premier ; à hauteur égale, le plus gros fichier.
+            variants = sorted(
+                variants, key=lambda v: (v["quality_height"], v["size_mb"]), reverse=True
+            )
+            # Les versions d'un même épisode partagent leurs sous-titres.
+            variant_ids = [v["id"] for v in variants]
+            for v in variants:
+                v["sibling_ids"] = variant_ids
+            primary = variants[0]
+            episodes.append({
+                "id":       primary["id"],          # id jouable par défaut (meilleure qualité)
+                "season":   primary["season"],
+                "episode":  primary["episode"],
+                "size_mb":  primary["size_mb"],
+                "ext":      primary["ext"],
+                "qualities": [
+                    {
+                        "id":      v["id"],
+                        "label":   v["quality"],
+                        "height":  v["quality_height"],
+                        "size_mb": v["size_mb"],
+                        "ext":     v["ext"],
+                    }
+                    for v in variants
+                ],
+            })
+        episodes.sort(key=lambda e: (e["season"], e["episode"]))
         items.append({
             "id":          series_id,
             "title":       group["stitle"],
             "year":        None,
             "category":    group["category"],
-            "size_mb":     sum(e["size_mb"] for e in group["episodes"]),
-            "ext":         group["episodes"][0]["ext"],
+            "size_mb":     sum(e["size_mb"] for e in episodes),
+            "ext":         episodes[0]["ext"] if episodes else ".mkv",
             "kind":        "series",
-            "episodes":    group["episodes"],
-            "episode_count": len(group["episodes"]),
-            "season_count": len({e["season"] for e in group["episodes"]}),
+            "episodes":    episodes,
+            "episode_count": len(episodes),
+            "season_count": len({e["season"] for e in episodes}),
             "poster":      None, "backdrop": None, "overview": "",
         })
 
@@ -1352,8 +1560,9 @@ def scan_movies() -> list:
                             playable[q["id"]]["tmdb_id"] = tid
                 else:
                     for ep in it.get("episodes", []):
-                        if ep["id"] in playable:
-                            playable[ep["id"]]["tmdb_id"] = tid
+                        for q in ep.get("qualities", [{"id": ep["id"]}]):
+                            if q["id"] in playable:
+                                playable[q["id"]]["tmdb_id"] = tid
 
     _set_playable(playable)
     _save_tmdb_cache()
@@ -1560,10 +1769,13 @@ def _run_subtitle_scan(mode: str = "new"):
 
         try:
             if mode == "download":
-                # Télécharge un .srt français à côté du film puis (re)extrait pour
-                # le convertir en VTT via le pipeline « sous-titres externes ».
+                # Télécharge un .srt français à côté du film. On ne ré-extrait
+                # (coûteux : force=True supprime et refait tout le cache) QUE si
+                # un sous-titre a réellement été téléchargé. Sinon on lit le cache
+                # existant — sans quoi chaque cycle re-traiterait tous les
+                # épisodes sans français trouvable en ligne.
                 dl_ok, dl_info = download_subtitle_for(item)
-                meta = extract_tracks(item, force=True)
+                meta = extract_tracks(item, force=dl_ok)
                 reasons = meta.get("failures", [])
                 present = _group_sub_langs(item)   # langues de toutes les versions
                 has_fr  = "fr" in present
@@ -2071,6 +2283,106 @@ def api_subtitles_scan():
 def api_subtitles_status():
     """État courant de l'extraction en masse (pour la fenêtre de progression)."""
     return jsonify(_public_scan_state())
+
+
+@app.route("/api/subtitles/catalog")
+def api_subtitles_catalog():
+    """
+    Liste tous les sous-titres disponibles (films + épisodes de séries) pour
+    l'outil de resynchronisation. Chaque entrée : titre lisible + langue +
+    (movie_id, idx) pour cibler le VTT à décaler.
+    """
+    out = []
+    for item in get_movies():
+        if item["kind"] == "movie":
+            ids = [q["id"] for q in item.get("qualities", [])] or [item["id"]]
+            title = item["title"] + (f" ({item['year']})" if item.get("year") else "")
+            for s in _collect_subs_for_ids(ids):
+                out.append({
+                    "title":    title,
+                    "sub":      s["label"],
+                    "language": s["language"],
+                    "movie_id": s["movie_id"],
+                    "idx":      s["idx"],
+                })
+        else:
+            for ep in item.get("episodes", []):
+                ids = [q["id"] for q in ep.get("qualities", [])] or [ep["id"]]
+                title = (item["title"]
+                         + f" - S{ep['season']:02d}E{ep['episode']:02d}")
+                for s in _collect_subs_for_ids(ids):
+                    out.append({
+                        "title":    title,
+                        "sub":      s["label"],
+                        "language": s["language"],
+                        "movie_id": s["movie_id"],
+                        "idx":      s["idx"],
+                    })
+    out.sort(key=lambda e: e["title"].lower())
+    return jsonify(out)
+
+
+@app.route("/api/subtitles/shift", methods=["POST"])
+def api_subtitles_shift():
+    """
+    Décale tous les timecodes d'un sous-titre de `offset` secondes (± décimal).
+    Body JSON : { movie_id, idx, offset }. offset>0 = retarde, offset<0 = avance.
+    """
+    body = request.get_json(silent=True) or {}
+    movie_id = str(body.get("movie_id", ""))
+    try:
+        idx = int(body.get("idx"))
+        offset = float(body.get("offset"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "paramètres invalides"}), 400
+    if offset == 0:
+        return jsonify({"status": "error", "message": "décalage nul"}), 400
+
+    cache_dir = TRACKS_CACHE_DIR / movie_id
+    vtt = cache_dir / f"subs_{idx}.vtt"
+    if not vtt.exists():
+        return jsonify({"status": "error", "message": "sous-titre introuvable"}), 404
+
+    # 1) Décale le VTT servi au lecteur (effet immédiat).
+    n_vtt = shift_subtitle_file(vtt, offset)
+    if n_vtt < 0:
+        return jsonify({"status": "error", "message": "échec de l'écriture du VTT"}), 500
+    if n_vtt == 0:
+        return jsonify({"status": "error",
+                        "message": "aucun timecode reconnu dans ce sous-titre"}), 422
+
+    # 2) Pour un sous-titre externe : décale aussi le .srt/.vtt SOURCE (à côté de
+    #    la vidéo) pour que la modif persiste et que le fichier d'origine change.
+    n_src, src_name = 0, None
+    meta = _read_cached_meta(movie_id)
+    track = None
+    if meta:
+        track = next((t for t in meta.get("subtitle_tracks", []) if t.get("index") == idx), None)
+    source = track.get("source") if track else None
+    if not source and idx >= 1000:
+        mv = get_movie_by_id(movie_id)
+        if mv:
+            lang = track.get("language") if track else None
+            found = _find_external_source(mv["path"], lang)
+            source = str(found) if found else None
+    if source and Path(source).exists() and Path(source).suffix.lower() in (".srt", ".vtt"):
+        r = shift_subtitle_file(Path(source), offset)
+        if r > 0:
+            n_src, src_name = r, Path(source).name
+
+    # 3) Évite une ré-extraction parasite : on rend le cache plus récent que le
+    #    .srt source (sinon le prochain scan croirait le sous-titre « modifié »).
+    try:
+        meta_file = cache_dir / "tracks.json"
+        if meta_file.exists():
+            os.utime(meta_file, None)
+    except Exception:
+        pass
+
+    print(f"Sous-titre décalé de {offset:+.3f}s : {movie_id}/subs_{idx}.vtt "
+          f"({n_vtt} timecodes" + (f", source {src_name}: {n_src}" if src_name else "") + ")")
+    return jsonify({"status": "ok", "offset": offset,
+                    "shifted": n_vtt, "source_shifted": n_src, "source": src_name})
 
 
 @app.route("/api/settings", methods=["GET"])
