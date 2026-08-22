@@ -1,0 +1,20 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── Caches et données générées par CineLocal au premier lancement ─────────
+.tracks_cache/
+.tmdb_cache.json
+.cinelocal_settings.json
+
+# ── Fichiers produits par les scripts de conversion ───────────────────────
+*_out.mkv
+
+# ── Éditeurs / OS ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
