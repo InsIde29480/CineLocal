@@ -57,11 +57,24 @@ python3 --version
 sudo apt install ffmpeg            # Debian / Ubuntu / Raspberry Pi OS
 ```
 
-Dépendances Python :
+Dépendances Python — deux possibilités :
 
 ```bash
-pip install -r requirements.txt
+# Option A (recommandée sur Raspberry Pi OS) : paquets Debian
+sudo apt install python3-flask python3-requests python3-waitress
+
+# Option B : environnement virtuel
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
+
+> Sur Raspberry Pi OS / Debian 12+, un `pip install` direct échoue avec
+> `error: externally-managed-environment` (PEP 668) : le Python système est
+> géré par apt. Utilise l'une des deux options ci-dessus — n'utilise pas
+> `--break-system-packages`.
+>
+> Avec l'option B, lance le serveur avec `.venv/bin/python server.py` (et
+> pointe `ExecStart` du service systemd vers ce même python).
 
 ---
 

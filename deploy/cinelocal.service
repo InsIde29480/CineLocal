@@ -2,6 +2,10 @@
 #
 # Installation :
 #   1. Adapter User/Group/WorkingDirectory/ExecStart au chemin d'installation.
+#      ⚠ WorkingDirectory doit être le dossier qui contient server.py, sinon
+#      le service échoue avec « status=200/CHDIR ».
+#      Si les dépendances sont dans un venv, pointer ExecStart vers son python :
+#        ExecStart=/chemin/vers/CineLocal/.venv/bin/python /chemin/vers/CineLocal/server.py
 #   2. sudo cp deploy/cinelocal.service /etc/systemd/system/cinelocal.service
 #   3. sudo systemctl daemon-reload
 #   4. sudo systemctl enable --now cinelocal
