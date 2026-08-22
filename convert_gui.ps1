@@ -2,9 +2,10 @@
 .SYNOPSIS
     IHM (interface graphique) de conversion video H.264 + AAC pour CineLocal.
     Fusionne la logique de convert.ps1 et convert_only_format.ps1 :
-      - detecte les fichiers non H.264 / non AAC-MP3, ou au-dela de la resolution max
+      - detecte les fichiers non H.264 / non AAC stereo (2 canaux), ou au-dela de 1080p
       - permet de choisir l'encodeur (CPU / NVIDIA / Intel / AMD), la qualite (CRF/CQ)
-        et la resolution max (downscale)
+        et le format video (garder l'original ou forcer 1080p max)
+      - audio : toujours AAC stereo 2 canaux (Chromecast / PC) ; copie si deja conforme
       - convertit avec barre de progression + ETA, et bouton Annuler
     Sortie : <nom>_out.mkv (toutes pistes audio + sous-titres conservees).
     Un fichier _out deja > resolution max est propose et remplace en place.
@@ -26,7 +27,13 @@ Add-Type -AssemblyName System.Drawing
 # ====================================================================
 $VideoExtensions = @('.mkv', '.mp4', '.avi', '.mov', '.m4v', '.wmv', '.flv', '.webm', '.ts', '.m2ts')
 $VideoOK = @('h264')
-$AudioOK = @('aac', 'mp3')
+# Audio conforme = AAC avec 2 canaux max (Chromecast + PC). Tout le reste est re-encode.
+$AudioOKCodec   = 'aac'
+$AudioMaxCanaux = 2
+# Sous-titres texte a convertir en SRT (mov_text/text ne sont pas copiables en MKV)
+$SubsToSrt = @('mov_text', 'text', 'webvtt')
+# Sous-titres impossibles a garder proprement dans un MKV -> ignores
+$SubsDrop  = @('dvb_teletext', 'eia_608', 'arib_caption')
 
 # Etat global de la conversion
 $script:Cancel     = $false
@@ -43,18 +50,31 @@ function Test-FFmpeg {
 function Get-Codecs {
     param([string]$Path)
     $video = $null; $audio = $null; $width = 0; $height = 0
+    $channels = 0; $maxChannels = 0; $subs = @(); $audioCodecs = @()
     try {
         $json = & ffprobe -v quiet -print_format json -show_streams "$Path" 2>$null | ConvertFrom-Json
         foreach ($stream in $json.streams) {
             if ($stream.codec_type -eq 'video' -and -not $video) {
+                # On ignore les pistes "attached_pic" (jaquettes) pour la detection
+                if ($stream.disposition -and $stream.disposition.attached_pic -eq 1) { continue }
                 $video = $stream.codec_name
                 if ($stream.width)  { $width  = [int]$stream.width }
                 if ($stream.height) { $height = [int]$stream.height }
             }
-            if ($stream.codec_type -eq 'audio' -and -not $audio) { $audio = $stream.codec_name }
+            if ($stream.codec_type -eq 'audio') {
+                $ch = 0; if ($stream.channels) { $ch = [int]$stream.channels }
+                if (-not $audio) { $audio = $stream.codec_name; $channels = $ch }
+                if ($ch -gt $maxChannels) { $maxChannels = $ch }
+                $audioCodecs += [string]$stream.codec_name
+            }
+            if ($stream.codec_type -eq 'subtitle') { $subs += [string]$stream.codec_name }
         }
     } catch {}
-    return [PSCustomObject]@{ Video = $video; Audio = $audio; Width = $width; Height = $height }
+    return [PSCustomObject]@{
+        Video = $video; Audio = $audio; Width = $width; Height = $height
+        Channels = $channels; MaxChannels = $maxChannels
+        AudioCodecs = $audioCodecs; Subs = $subs
+    }
 }
 
 function Get-Duration {
@@ -93,9 +113,30 @@ function Build-VideoArgs {
 }
 
 function Build-AudioArgs {
-    param([bool]$AudioOk, [string]$Mode)  # Mode : 'aac' (Chromecast) ou 'copy'
-    if ($Mode -eq 'copy' -and $AudioOk) { return @('-c:a', 'copy') }
+    param([bool]$AudioOk)
+    # Toujours AAC stereo 2 canaux (Chromecast + PC). Copie directe si deja conforme.
+    if ($AudioOk) { return @('-c:a', 'copy') }
     return @('-c:a', 'aac', '-profile:a', 'aac_low', '-b:a', '192k', '-ac', '2')
+}
+
+# Sous-titres : mapping piste par piste.
+#  - mov_text / text / webvtt : non copiables (ou mal geres) en MKV -> conversion SRT
+#  - dvb_teletext, eia_608...  : pas exploitables -> ignores
+#  - le reste (subrip, ass, ssa, hdmv_pgs, dvd_subtitle...) : copie telle quelle
+function Build-SubArgs {
+    param([string[]]$Subs)
+    if (-not $Subs -or $Subs.Count -eq 0) { return @() }
+    $subArgs = @()
+    $outIdx = 0
+    for ($i = 0; $i -lt $Subs.Count; $i++) {
+        $codec = $Subs[$i]
+        if ($SubsDrop -contains $codec) { continue }   # piste non mappee -> ignoree
+        $subArgs += @('-map', "0:s:$i")
+        if ($SubsToSrt -contains $codec) { $subArgs += @("-c:s:$outIdx", 'srt') }
+        else                             { $subArgs += @("-c:s:$outIdx", 'copy') }
+        $outIdx++
+    }
+    return $subArgs
 }
 
 # Guillemets pour les arguments ffmpeg (chemins avec espaces) - Windows PowerShell 5.1
@@ -190,30 +231,27 @@ $grp.Controls.Add($numCrf)
 
 # Resolution max
 $lblRes = New-Object System.Windows.Forms.Label
-$lblRes.Text = "Resolution max"; $lblRes.Location = New-Object System.Drawing.Point(310, 22); $lblRes.AutoSize = $true
+$lblRes.Text = "Format video"; $lblRes.Location = New-Object System.Drawing.Point(310, 22); $lblRes.AutoSize = $true
 $lblRes.ForeColor = [System.Drawing.Color]::Gainsboro
 $grp.Controls.Add($lblRes)
 $cmbRes = New-Object System.Windows.Forms.ComboBox
-$cmbRes.Location = New-Object System.Drawing.Point(310, 42); $cmbRes.Size = New-Object System.Drawing.Size(150, 24)
+$cmbRes.Location = New-Object System.Drawing.Point(310, 42); $cmbRes.Size = New-Object System.Drawing.Size(190, 24)
 $cmbRes.DropDownStyle = 'DropDownList'
-[void]$cmbRes.Items.Add("1080p (recommande Pi)")
-[void]$cmbRes.Items.Add("720p")
-[void]$cmbRes.Items.Add("Aucune limite")
+[void]$cmbRes.Items.Add("Forcer 1080p max")
+[void]$cmbRes.Items.Add("Garder le format d'origine")
 $cmbRes.SelectedIndex = 0
 $grp.Controls.Add($cmbRes)
 
-# Audio
+# Audio (fixe : AAC stereo 2 canaux, copie si deja conforme)
 $lblAud = New-Object System.Windows.Forms.Label
-$lblAud.Text = "Audio"; $lblAud.Location = New-Object System.Drawing.Point(475, 22); $lblAud.AutoSize = $true
+$lblAud.Text = "Audio"; $lblAud.Location = New-Object System.Drawing.Point(515, 22); $lblAud.AutoSize = $true
 $lblAud.ForeColor = [System.Drawing.Color]::Gainsboro
 $grp.Controls.Add($lblAud)
-$cmbAud = New-Object System.Windows.Forms.ComboBox
-$cmbAud.Location = New-Object System.Drawing.Point(475, 42); $cmbAud.Size = New-Object System.Drawing.Size(220, 24)
-$cmbAud.DropDownStyle = 'DropDownList'
-[void]$cmbAud.Items.Add("AAC stereo (Chromecast)")
-[void]$cmbAud.Items.Add("Copier si deja AAC/MP3")
-$cmbAud.SelectedIndex = 0
-$grp.Controls.Add($cmbAud)
+$lblAudFixed = New-Object System.Windows.Forms.Label
+$lblAudFixed.Text = "AAC stereo 2 canaux (Chromecast / PC)"
+$lblAudFixed.Location = New-Object System.Drawing.Point(515, 46); $lblAudFixed.AutoSize = $true
+$lblAudFixed.ForeColor = [System.Drawing.Color]::Silver
+$grp.Controls.Add($lblAudFixed)
 
 # --- Liste des fichiers ---
 $grid = New-Object System.Windows.Forms.DataGridView
@@ -300,9 +338,8 @@ function Write-Log { param([string]$Msg)
 # ====================================================================
 function Get-ResLimit {
     switch ($cmbRes.SelectedIndex) {
-        0 { return @{ H = 1080; W = 1920 } }
-        1 { return @{ H = 720;  W = 1280 } }
-        default { return @{ H = 100000; W = 100000 } }  # aucune limite
+        0 { return @{ H = 1080; W = 1920 } }              # Forcer 1080p max
+        default { return @{ H = 100000; W = 100000 } }    # Garder le format d'origine
     }
 }
 function Get-EncoderKey {
@@ -319,7 +356,6 @@ function Do-Scan {
     $lblStatus.Text = "Scan en cours..."
     [System.Windows.Forms.Application]::DoEvents()
 
-    $res = Get-ResLimit
     $files = Get-ChildItem -LiteralPath $folder -File | Where-Object { $VideoExtensions -contains $_.Extension.ToLower() }
     $n = 0
     foreach ($file in $files) {
@@ -327,29 +363,52 @@ function Do-Scan {
         $isOut = ($file.BaseName -like "*_out")
         $c = Get-Codecs -Path $file.FullName
         $videoOk = $VideoOK -contains $c.Video
-        $audioOk = $AudioOK -contains $c.Audio
-        $needsDownscale = ($c.Height -gt $res.H)
+        # Audio conforme = TOUTES les pistes en AAC ET aucune piste au-dela de 2 canaux
+        $nonAac = @($c.AudioCodecs | Where-Object { $_ -ne $AudioOKCodec })
+        $audioOk = ($c.AudioCodecs.Count -gt 0) -and ($nonAac.Count -eq 0) `
+                   -and ($c.MaxChannels -ge 1) -and ($c.MaxChannels -le $AudioMaxCanaux)
 
-        if ($isOut) { $needsProc = $needsDownscale }
-        else        { $needsProc = (-not $videoOk) -or (-not $audioOk) -or $needsDownscale }
-
-        $statut = if ($needsProc) {
-            if ($isOut) { "a reduire (_out)" } else { "a convertir" }
-        } else { "OK" }
+        $audTxt = if ($c.Audio) { if ($c.Channels -gt 0) { "$($c.Audio) $($c.Channels)ch" } else { $c.Audio } } else { "-" }
         $resTxt = if ($c.Height) { "$($c.Width)x$($c.Height)" } else { "?" }
 
-        $ri = $grid.Rows.Add(@($needsProc, $file.Name, $c.Video, $c.Audio, $resTxt, $statut))
+        $ri = $grid.Rows.Add(@($false, $file.Name, $c.Video, $audTxt, $resTxt, ""))
         $row = $grid.Rows[$ri]
         $row.Tag = [PSCustomObject]@{
             File = $file; VideoOk = $videoOk; AudioOk = $audioOk
-            Downscale = $needsDownscale; Height = $c.Height; IsOut = $isOut
+            Downscale = $false; Height = $c.Height; IsOut = $isOut; Subs = $c.Subs
         }
-        if ($needsProc) { $row.Cells["Statut"].Style.ForeColor = $gold }
-        else            { $row.Cells["Statut"].Style.ForeColor = [System.Drawing.Color]::MediumSeaGreen }
         $n++
     }
+    Update-Statuses   # applique le format video choisi sans re-sonder les fichiers
     $lblStatus.Text = "$n fichier(s) trouve(s). Coche ceux a convertir puis 'Convertir'."
     Write-Log "Scan termine : $n fichier(s)."
+}
+
+# Recalcule statuts et coches d'apres le cache (Tag) - AUCUN nouvel appel ffprobe.
+# Appele apres le scan et quand on change l'option de format video.
+function Update-Statuses {
+    if ($script:Converting) { return }
+    $res = Get-ResLimit
+    foreach ($row in $grid.Rows) {
+        $meta = $row.Tag
+        if (-not $meta) { continue }
+        if ($row.Cells["Statut"].Value -eq "OK termine") { continue }  # deja traite
+
+        $needsDownscale = ($meta.Height -gt $res.H)
+        $meta.Downscale = $needsDownscale
+
+        if ($meta.IsOut) { $needsProc = $needsDownscale }
+        else             { $needsProc = (-not $meta.VideoOk) -or (-not $meta.AudioOk) -or $needsDownscale }
+
+        $statut = if ($needsProc) {
+            if ($meta.IsOut) { "a reduire (_out)" } else { "a convertir" }
+        } else { "OK" }
+
+        $row.Cells["Sel"].Value = $needsProc
+        $row.Cells["Statut"].Value = $statut
+        if ($needsProc) { $row.Cells["Statut"].Style.ForeColor = $gold }
+        else            { $row.Cells["Statut"].Style.ForeColor = [System.Drawing.Color]::MediumSeaGreen }
+    }
 }
 
 # ====================================================================
@@ -372,7 +431,6 @@ function Do-Convert {
     $encoder = Get-EncoderKey
     $crf     = [int]$numCrf.Value
     $res     = Get-ResLimit
-    $audMode = if ($cmbAud.SelectedIndex -eq 1) { 'copy' } else { 'aac' }
 
     $script:Converting = $true; $script:Cancel = $false
     $btnConvert.Enabled = $false; $btnScan.Enabled = $false; $btnCancel.Enabled = $true
@@ -394,10 +452,14 @@ function Do-Convert {
         }
 
         $vArgs = Build-VideoArgs -NeedsConversion (-not $meta.VideoOk) -Downscale $meta.Downscale -Encoder $encoder -Crf $crf -MaxW $res.W -MaxH $res.H
-        $aArgs = Build-AudioArgs -AudioOk $meta.AudioOk -Mode $audMode
+        $aArgs = Build-AudioArgs -AudioOk $meta.AudioOk
+        $sArgs = Build-SubArgs -Subs $meta.Subs
 
-        $ffArgs = @('-i', $file.FullName, '-map', '0:v:0', '-map', '0:a', '-map', '0:s?') `
-            + $vArgs + $aArgs + @('-c:s', 'copy', '-progress', 'pipe:1', '-nostats', '-loglevel', 'error', '-y', $output)
+        # -map 0:a? : ne plante pas si le fichier n'a pas d'audio
+        # -map 0:t? + -c:t copy : conserve les polices embarquees (sous-titres ASS)
+        $ffArgs = @('-i', $file.FullName, '-map', '0:v:0', '-map', '0:a?') `
+            + $sArgs + @('-map', '0:t?', '-c:t', 'copy') `
+            + $vArgs + $aArgs + @('-progress', 'pipe:1', '-nostats', '-loglevel', 'error', '-y', $output)
 
         $total = Get-Duration -Path $file.FullName
         $start = Get-Date
@@ -492,7 +554,7 @@ $btnConvert.Add_Click({ Do-Convert })
 $btnCancel.Add_Click({ $script:Cancel = $true; $lblStatus.Text = "Annulation..." })
 $btnAll.Add_Click({ foreach ($r in $grid.Rows) { if ($r.Tag) { $r.Cells["Sel"].Value = $true } } })
 $btnNone.Add_Click({ foreach ($r in $grid.Rows) { $r.Cells["Sel"].Value = $false } })
-$cmbRes.Add_SelectedIndexChanged({ if ($grid.Rows.Count -gt 0) { Do-Scan } })
+$cmbRes.Add_SelectedIndexChanged({ Update-Statuses })   # pas de re-scan : recalcul depuis le cache
 $form.Add_FormClosing({ if ($script:Converting) { $script:Cancel = $true } })
 
 # Scan initial du dossier courant
