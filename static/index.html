@@ -29,13 +29,11 @@
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button>
-        <!-- <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button> -->
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
       <button class="btn-refresh" id="subsScanBtn" onclick="openSubsModal()" title="Extraction des sous-titres">💬<span class="btn-label"> Sous-titres</span></button>
       <button class="btn-refresh" id="settingsBtn" onclick="openSettingsModal()" title="Paramètres">⚙<span class="btn-label"> Paramètres</span></button>
       <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
-      <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹<span class="btn-label"> Stop TV</span></button>
     </div>
   </nav>
 

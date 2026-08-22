@@ -8,12 +8,15 @@ var currentMovie  = null;
 var castSession   = null;
 var castAvailable = false;
 var castSdkLoaded = false;
+// Mode mémorisé ('pc' ou 'tv'). L'ancien mode 'local' (TV directe, supprimé)
+// peut encore traîner dans le navigateur : on retombe alors sur 'pc'.
 var currentMode   = localStorage.getItem('cinelocal-mode') || 'pc';
+if (currentMode !== 'pc' && currentMode !== 'tv') currentMode = 'pc';
 var currentSeries = null;
 var currentSeason = null;
 
 // État Cast / options de lecture
-var optionsTarget     = 'cast';   // 'pc' = navigateur, 'cast' = Chromecast, 'local' = MPV sur la TV du Pi
+var optionsTarget     = 'cast';   // 'pc' = navigateur, 'cast' = Chromecast
 var castMoviePending  = null;
 var castTracks        = null;
 var castSelectedAudio = 0;
@@ -183,7 +186,7 @@ function launchCastMedia(movie, audioIdx, subTrack, attempt, info) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MODAL OPTIONS (PC navigateur / Chromecast / TV directe)
+// MODAL OPTIONS (PC navigateur / Chromecast)
 // ═══════════════════════════════════════════════════════════════════
 function openOptions(movie, target, initialQuality) {
   optionsTarget    = target;
@@ -205,7 +208,6 @@ function openOptions(movie, target, initialQuality) {
   var titles = {
     pc:    ['🎞️ Choix de la qualité', '▶ Lire'],
     cast:  ['📺 Options Cast',         '📺 Lancer le Cast'],
-    // local: ['📽️ Options TV directe',   '📽️ Lire sur la TV'],
   };
   document.getElementById('optionsTitle').textContent   = titles[target][0];
   document.getElementById('btnLaunchLabel').textContent = titles[target][1];
@@ -225,9 +227,8 @@ function openOptions(movie, target, initialQuality) {
   loadTracksForQuality();
 }
 
-// Wrappers conservés pour compat (appelés ailleurs)
+// Wrapper conservé pour compat (appelé ailleurs)
 function startCast(movie)  { openOptions(movie, 'cast'); }
-function startLocal(movie) { openOptions(movie, 'local'); }
 
 function _selectedQuality() {
   return optQualities[optSelectedQuality] || optQualities[0];
@@ -363,9 +364,8 @@ function closeCastOptions() {
 }
 
 function launchOptions() {
-  if (optionsTarget === 'pc')         launchPc();
-  else if (optionsTarget === 'local') launchLocal();
-  else                                launchCast();
+  if (optionsTarget === 'pc') launchPc();
+  else                        launchCast();
 }
 
 // Construit l'objet à lire : le film courant mais avec l'id et l'extension de
@@ -491,33 +491,6 @@ function prepareAudioThenCast(movie, audioIdx, subTrack) {
   }
 
   poll();
-}
-
-// ─── LANCEMENT TV DIRECTE (MPV) ───────────────────────────────────────────
-function launchLocal() {
-  if (!castMoviePending) return;
-
-  var play     = _playItem();
-  var audioIdx = _chosenAudioIdx();
-  var subTrack = _chosenSubTrack();
-  var subIdx   = subTrack ? subTrack.index : null;
-
-  closeCastOptions();
-
-  var url = '/play/' + play.id + '?audio=' + audioIdx;
-  if (subIdx !== null) url += '&sub=' + subIdx;
-
-  fetch(url, { method: 'POST' })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      if (data.status === 'ok') {
-        markWatched(play.id);
-        alert('▶ Lecture sur la TV : ' + data.playing);
-      } else {
-        alert('Erreur : ' + (data.message || 'lecture impossible'));
-      }
-    })
-    .catch(function (e) { alert('Erreur : ' + e); });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -898,7 +871,6 @@ function openMovieDetails(id) {
   // Boutons : Lire (la version choisie) + Chromecast (avec la version choisie)
   var btns = '<button class="btn-fiche primary" onclick="fichePlay()">▶ Lire</button>';
   btns += '<button class="btn-fiche ghost" onclick="ficheCast()">📺 Chromecast</button>';
-  // btns += '<button class="btn-fiche ghost" onclick="ficheLocal()">📽️ TV directe</button>';
   document.getElementById('ficheButtons').innerHTML = btns;
 
   // Sous-titres de la version sélectionnée (rechargés si on change de version).
@@ -1032,13 +1004,6 @@ function ficheCast() {
   openOptions(m, 'cast', qi);
 }
 
-function ficheLocal() {
-  if (!currentFiche) return;
-  var m = currentFiche;
-  closeMovieModal();
-  openOptions(m, 'local');
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // SÉRIES
 // ═══════════════════════════════════════════════════════════════════
@@ -1085,7 +1050,7 @@ function updateSeriesMeta() {
 function renderEpisodes() {
   if (!currentSeries) return;
   var eps      = currentSeries.episodes.filter(function (e) { return e.season === currentSeason; });
-  var btnLabel = currentMode === 'tv' ? '📺 Caster' : currentMode === 'local' ? '📽️ TV' : '▶ Lire';
+  var btnLabel = currentMode === 'tv' ? '📺 Caster' : '▶ Lire';
 
   // Prochain épisode à voir : premier non vu de toute la série
   // (les épisodes sont déjà triés saison/épisode côté serveur).
@@ -1126,12 +1091,11 @@ function playEpisode(episodeId) {
   });
   var multiQuality = ep.qualities && ep.qualities.length > 1;
   closeSeriesModal();
-  // Cast / TV : la modale d'options propose déjà le choix de la qualité.
-  if (currentMode === 'tv')         openOptions(fakeMovie, 'cast');
-  else if (currentMode === 'local') openOptions(fakeMovie, 'local');
+  // Cast : la modale d'options propose déjà le choix de la qualité.
+  if (currentMode === 'tv')  openOptions(fakeMovie, 'cast');
   // PC : s'il y a plusieurs versions (4K / HD), on ouvre le choix ; sinon lecture directe.
-  else if (multiQuality)            openOptions(fakeMovie, 'pc');
-  else                              playPc(fakeMovie, 0, null);
+  else if (multiQuality)     openOptions(fakeMovie, 'pc');
+  else                       playPc(fakeMovie, 0, null);
 }
 
 function closeSeriesModal() {
