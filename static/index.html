@@ -12,11 +12,19 @@
     href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@300;400&display=swap"
     rel="stylesheet" />
 
-  <link rel="stylesheet" href="/static/style.css?v=13" />
+  <!-- Feuilles de style par fonctionnalité (base.css d'abord : variables,
+       responsive.css en dernier : surcharges mobile). ?v=N = cache-busting. -->
+  <link rel="stylesheet" href="/static/css/base.css?v=14" />
+  <link rel="stylesheet" href="/static/css/nav.css?v=14" />
+  <link rel="stylesheet" href="/static/css/catalogue.css?v=14" />
+  <link rel="stylesheet" href="/static/css/player.css?v=14" />
+  <link rel="stylesheet" href="/static/css/modals.css?v=14" />
+  <link rel="stylesheet" href="/static/css/responsive.css?v=14" />
 </head>
 
 <body>
 
+  <!-- ═══ BARRE DE NAVIGATION (logo, recherche, mode PC/Cast, boutons) ═══ -->
   <nav>
     <a class="logo" href="#">CINE<span>LOCAL</span></a>
     <div class="search-wrap">
@@ -29,25 +37,25 @@
       <div class="mode-toggle" id="modeToggle">
         <button class="mode-btn active" data-mode="pc"    onclick="setMode('pc')">🖥️</button>
         <button class="mode-btn"        data-mode="tv"    onclick="setMode('tv')">📺</button>
-        <!-- <button class="mode-btn"        data-mode="local" onclick="setMode('local')">📽️<span class="btn-label"> TV directe</span></button> -->
       </div>
       <button class="btn-refresh" onclick="refreshMovies()">↺</button>
       <button class="btn-refresh" id="subsScanBtn" onclick="openSubsModal()" title="Extraction des sous-titres">💬<span class="btn-label"> Sous-titres</span></button>
       <button class="btn-refresh" id="settingsBtn" onclick="openSettingsModal()" title="Paramètres">⚙<span class="btn-label"> Paramètres</span></button>
-      <google-cast-launcher id="castBtn" style="display:none"></google-cast-launcher>
-      <button class="btn-refresh" onclick="fetch('/stop',{method:'POST'})">⏹<span class="btn-label"> Stop TV</span></button>
+      <google-cast-launcher id="castBtn"></google-cast-launcher>
     </div>
   </nav>
 
+  <!-- ═══ FOND ANIMÉ (diaporama des affiches) ═══ -->
   <section id="hero">
     <div class="hero-layer visible" id="hero-layer-0"></div>
     <div class="hero-layer" id="hero-layer-1"></div>
     <div id="hero-grad"></div>
   </section>
 
+  <!-- ═══ CATALOGUE (sections par catégorie, cards) ═══ -->
   <main id="catalogue">
     <div id="loading"><div class="spinner"></div>Chargement de la bibliothèque…</div>
-    <div id="empty" style="display:none">Aucun film trouvé dans ~/nvme_data</div>
+    <div id="empty">Aucun film trouvé — vérifie les dossiers dans ⚙ Paramètres</div>
     <div id="movies-container"></div>
   </main>
 
@@ -203,11 +211,11 @@
           <div class="set-group-title">📁 Chemins</div>
           <label class="set-field">
             <span class="set-label">Dossiers des films — un par ligne</span>
-            <textarea id="setMoviesDirs" class="set-input set-textarea" autocomplete="off" spellcheck="false" rows="3" placeholder="/home/pi/storage/6TO/Films&#10;/media/usb-disk2/Films"></textarea>
+            <textarea id="setMoviesDirs" class="set-input set-textarea" autocomplete="off" spellcheck="false" rows="3" placeholder="/chemin/vers/Films&#10;/chemin/vers/autre-disque/Films"></textarea>
           </label>
           <label class="set-field">
             <span class="set-label">Dossier des sous-titres (cache)</span>
-            <input type="text" id="setTracksDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/home/pi/storage/6TO/.tracks_cache">
+            <input type="text" id="setTracksDir" class="set-input" autocomplete="off" spellcheck="false" placeholder="/chemin/vers/.tracks_cache">
           </label>
           <div class="set-hint">Chemins absolus sur le serveur, même structure <code>Films/&lt;catégorie&gt;/…</code>. Tu peux ajouter plusieurs disques/dossiers (un par ligne) ; ils sont scannés ensemble. Un changement relance l'analyse de la bibliothèque.</div>
         </div>
@@ -257,7 +265,7 @@
 
         <div class="set-group">
           <div class="set-group-title">🛠️ Outils</div>
-          <button class="btn-cast-launch subs-force" style="width:100%;justify-content:center" onclick="openSubSyncModal()">
+          <button class="btn-cast-launch subs-force btn-block" onclick="openSubSyncModal()">
             <span>🕐 Resynchroniser des sous-titres décalés</span>
           </button>
           <div class="set-hint">Avancer ou retarder les timecodes d'un sous-titre (film ou épisode) de quelques secondes.</div>
@@ -300,7 +308,7 @@
 
         <div class="sync-selected" id="syncSelected">Aucun sous-titre sélectionné.</div>
 
-        <div class="sync-controls" id="syncControls" style="display:none">
+        <div class="sync-controls" id="syncControls">
           <div class="set-group-title">Décalage</div>
           <div class="sync-dir">
             <button class="sync-dir-btn active" id="syncDirLater"  onclick="setSyncDir(1)">＋ Retarder <span>(plus tard)</span></button>
@@ -348,6 +356,16 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=13"></script>
+  <!-- Scripts par fonctionnalité, chargés dans l'ordre des dépendances
+       (utils.js d'abord, main.js en dernier). ?v=N = cache-busting. -->
+  <script src="/static/js/utils.js?v=14"></script>
+  <script src="/static/js/catalogue.js?v=14"></script>
+  <script src="/static/js/cast.js?v=14"></script>
+  <script src="/static/js/options.js?v=14"></script>
+  <script src="/static/js/player.js?v=14"></script>
+  <script src="/static/js/details.js?v=14"></script>
+  <script src="/static/js/subtitles.js?v=14"></script>
+  <script src="/static/js/settings.js?v=14"></script>
+  <script src="/static/js/main.js?v=14"></script>
 </body>
 </html>

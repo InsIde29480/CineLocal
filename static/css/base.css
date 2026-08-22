@@ -1,0 +1,44 @@
+/* ═══════════════════════════════════════════════════════════════════
+   BASE — variables, reset, fond, éléments génériques
+   Chargé en PREMIER : les autres feuilles utilisent les variables :root.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg: #080a0e; --bg2: #0e1117; --bg3: #151b24;
+  --surface: #1a2130; --border: rgba(255, 255, 255, 0.07);
+  --gold: #c9a84c; --gold2: #f0d080; --red: #e53030;
+  --text: #e8e0d0; --muted: #7a7060;
+  --radius: 4px; --card-w: 220px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: 'Crimson Pro', serif;
+  min-height: 100vh; overflow-x: hidden;
+}
+/* Léger grain photographique par-dessus toute la page */
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 9999; opacity: 0.4;
+}
+
+/* États de chargement du catalogue */
+#loading, #empty {
+  padding: 8rem 3rem; text-align: center;
+  font-family: 'DM Mono', monospace; font-size: 0.8rem;
+  color: var(--muted); letter-spacing: 0.08em;
+}
+#empty { display: none; }   /* affiché par le JS quand le catalogue est vide */
+.spinner {
+  width: 32px; height: 32px;
+  border: 2px solid var(--border); border-top-color: var(--gold);
+  border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 1rem;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }

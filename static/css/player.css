@@ -1,0 +1,235 @@
+/* ═══════════════════════════════════════════════════════════════════
+   PLAYER — lecteur navigateur, modale d'options Cast et barre de statut
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Player modal (lecture navigateur) ──────────────────────────────── */
+#player-modal {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.92);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .3s;
+}
+#player-modal.open { opacity: 1; pointer-events: all; }
+.player-container {
+  position: relative; width: min(92vw, 1200px);
+  background: #000; border-radius: 4px; overflow: hidden;
+  box-shadow: 0 40px 120px rgba(0,0,0,0.9);
+  transform: scale(0.96); transition: transform .3s;
+}
+#player-modal.open .player-container { transform: scale(1); }
+.player-header {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+  padding: 1rem 1.5rem;
+  display: flex; align-items: center; justify-content: space-between;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+}
+.player-title {
+  font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem;
+  letter-spacing: 0.08em; color: #fff;
+}
+.icon-btn {
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; width: 36px; height: 36px;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .2s;
+}
+.icon-btn:hover { background: rgba(255,255,255,0.25); }
+#player-video { width: 100%; display: block; aspect-ratio: 16/9; background: #000; }
+
+/* Sous-titres : force un positionnement explicite pour éviter que le
+   conteneur natif WebKit ne se cache quand les contrôles auto-masquent */
+#player-video::cue {
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-family: 'DM Mono', monospace;
+  font-size: 1.05em;
+  line-height: 1.35;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.85);
+}
+#player-video::-webkit-media-text-track-container {
+  overflow: visible !important;
+  pointer-events: none;
+}
+#player-video::-webkit-media-text-track-display {
+  top: auto !important;
+  bottom: 10% !important;
+  text-align: center;
+}
+
+/* Overlay chargement */
+.player-loading {
+  position: absolute; inset: 0; background: rgba(0,0,0,0.92);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 1.5rem; z-index: 5; transition: opacity 0.4s ease;
+}
+.player-loading.hidden { opacity: 0; pointer-events: none; }
+.loading-spinner {
+  width: 56px; height: 56px;
+  border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--gold);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+.loading-text {
+  font-family: 'DM Mono', monospace; font-size: 0.85rem;
+  color: var(--text); letter-spacing: 0.12em; text-transform: uppercase; text-align: center;
+}
+.loading-substep {
+  font-family: 'DM Mono', monospace; font-size: 0.7rem;
+  color: var(--muted); letter-spacing: 0.08em; text-align: center; max-width: 400px;
+}
+.loading-steps { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.loading-step { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.2); transition: background 0.3s; }
+.loading-step.active { background: var(--gold); }
+.loading-step.done { background: rgba(201,168,76,0.5); }
+
+/* Bouton CC du lecteur (sélecteur de sous-titres) */
+.sub-selector {
+  position: absolute; bottom: 70px; right: 1rem;
+  z-index: 11; display: none;
+  flex-direction: column; align-items: flex-end; gap: 0.4rem;
+}
+.sub-selector.visible { display: flex; }
+.sub-selector-toggle {
+  background: rgba(0,0,0,0.75); border: 1px solid rgba(255,255,255,0.35);
+  color: #fff; font-family: 'DM Mono', monospace;
+  font-size: 0.72rem; letter-spacing: 0.1em;
+  padding: 0.4rem 0.75rem; border-radius: 3px;
+  cursor: pointer; transition: all .15s;
+}
+.sub-selector-toggle:hover { border-color: var(--gold); color: var(--gold); }
+.sub-selector-toggle.active {
+  background: var(--gold); border-color: var(--gold); color: #080a0e;
+}
+.sub-selector-panel {
+  display: none; flex-direction: column; gap: 0.35rem;
+  background: rgba(0,0,0,0.92); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.6rem;
+  min-width: 190px; max-height: 45vh; overflow-y: auto;
+}
+.sub-selector.open .sub-selector-panel { display: flex; }
+.sub-panel-label {
+  font-family: 'DM Mono', monospace; font-size: 0.62rem;
+  color: var(--gold); letter-spacing: 0.12em;
+  text-transform: uppercase; margin-bottom: 0.2rem;
+}
+.sub-option {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+  color: #fff; font-family: 'DM Mono', monospace; font-size: 0.72rem;
+  padding: 0.35rem 0.6rem; border-radius: 2px;
+  cursor: pointer; text-align: left; transition: all .15s;
+}
+.sub-option:hover { background: rgba(255,255,255,0.18); }
+.sub-option.active { background: var(--gold); border-color: var(--gold); color: #080a0e; }
+
+/* ─── Modale d'options (qualité / audio / sous-titres avant lecture) ── */
+#cast-options-modal {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.88);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .3s; padding: 2rem;
+}
+#cast-options-modal.open { opacity: 1; pointer-events: all; }
+.cast-options-container {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; width: min(95vw, 540px);
+  transform: scale(0.95); transition: transform .3s; overflow: hidden;
+}
+#cast-options-modal.open .cast-options-container { transform: scale(1); }
+.cast-options-header {
+  padding: 1.5rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; justify-content: space-between;
+}
+.cast-options-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.4rem; letter-spacing: 0.08em; color: var(--gold);
+}
+.cast-options-film {
+  font-family: 'DM Mono', monospace; font-size: 0.7rem;
+  color: var(--muted); margin-top: 0.2rem; letter-spacing: 0.05em;
+}
+.cast-options-body { padding: 1.2rem 1.5rem; max-height: 60vh; overflow-y: auto; }
+.cast-section { margin-bottom: 1.4rem; }
+.cast-section-label {
+  font-family: 'DM Mono', monospace; font-size: 0.65rem;
+  color: var(--gold); letter-spacing: 0.15em;
+  text-transform: uppercase; margin-bottom: 0.6rem;
+}
+.cast-option-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  margin-bottom: 0.4rem; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.cast-option-row:hover { border-color: rgba(201,168,76,0.4); background: rgba(201,168,76,0.05); }
+.cast-option-row.selected { border-color: var(--gold); background: rgba(201,168,76,0.08); }
+.cast-option-radio {
+  width: 16px; height: 16px;
+  border: 2px solid var(--muted); border-radius: 50%;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  transition: border-color .15s;
+}
+.cast-option-row.selected .cast-option-radio { border-color: var(--gold); }
+.cast-option-radio-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold); opacity: 0; transition: opacity .15s;
+}
+.cast-option-row.selected .cast-option-radio-dot { opacity: 1; }
+.cast-option-text { flex: 1; }
+.cast-option-name { font-family: 'Crimson Pro', serif; font-size: 0.95rem; color: var(--text); }
+.cast-option-meta { font-family: 'DM Mono', monospace; font-size: 0.62rem; color: var(--muted); margin-top: 0.1rem; }
+.cast-options-footer {
+  padding: 1rem 1.5rem; border-top: 1px solid var(--border);
+  display: flex; gap: 0.75rem; justify-content: flex-end;
+}
+.btn-cast-cancel {
+  background: none; border: 1px solid var(--border);
+  color: var(--muted); font-family: 'Bebas Neue', sans-serif;
+  font-size: 1rem; letter-spacing: 0.1em;
+  padding: 0.6rem 1.4rem; border-radius: 2px;
+  cursor: pointer; transition: all .2s;
+}
+.btn-cast-cancel:hover { border-color: var(--muted); color: var(--text); }
+.btn-cast-launch {
+  background: var(--gold); border: none; color: #080a0e;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1rem; letter-spacing: 0.1em;
+  padding: 0.6rem 1.8rem; border-radius: 2px;
+  cursor: pointer; transition: all .2s;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.btn-cast-launch:hover { background: var(--gold2); transform: translateY(-1px); }
+.btn-cast-launch:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+/* Variante « secondaire » (contour) et bouton pleine largeur */
+.btn-cast-launch.subs-force {
+  background: transparent; border: 1px solid rgba(255,255,255,0.25); color: var(--text);
+}
+.btn-cast-launch.subs-force:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+.btn-block { width: 100%; justify-content: center; }
+.cast-loading-msg {
+  font-family: 'DM Mono', monospace; font-size: 0.7rem;
+  color: var(--muted); text-align: center; padding: 1.5rem;
+  letter-spacing: 0.08em;
+}
+.cast-empty-msg {
+  font-family: 'DM Mono', monospace; font-size: 0.65rem;
+  color: var(--muted); padding: 0.4rem 0.75rem; font-style: italic;
+}
+
+/* ─── Barre de statut Cast (diffusion en cours) ──────────────────────── */
+.cast-status-bar {
+  position: fixed; bottom: 1.5rem; left: 50%;
+  transform: translateX(-50%); z-index: 150;
+  background: var(--surface); border: 1px solid var(--gold);
+  border-radius: 4px; padding: 0.75rem 1.5rem;
+  display: none; align-items: center; gap: 0.75rem;
+  font-family: 'DM Mono', monospace; font-size: 0.75rem;
+  color: var(--gold); box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.cast-status-bar.visible { display: flex; }
+.cast-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); animation: pulse 1.5s infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}

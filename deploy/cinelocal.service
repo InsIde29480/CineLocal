@@ -1,0 +1,34 @@
+# Unité systemd pour lancer CineLocal automatiquement au démarrage.
+#
+# Installation :
+#   1. Adapter User/Group/WorkingDirectory/ExecStart au chemin d'installation.
+#   2. sudo cp deploy/cinelocal.service /etc/systemd/system/cinelocal.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now cinelocal
+#
+# Suivre les logs : sudo journalctl -u cinelocal -f
+
+[Unit]
+Description=CineLocal - Serveur de films local
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nas
+Group=nas
+WorkingDirectory=/home/nas/serveur_films
+ExecStart=/usr/bin/python3 /home/nas/serveur_films/server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cinelocal
+
+# Sécurité
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=80%
+
+[Install]
+WantedBy=multi-user.target

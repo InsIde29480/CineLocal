@@ -1,0 +1,4 @@
+# Dépendances Python de CineLocal (installer avec : pip install -r requirements.txt)
+flask>=2.0
+requests>=2.25
+waitress>=2.0
