@@ -62,6 +62,12 @@
     width: 42px; height: 42px;
   }
 
+  /* Fiche série : un seul défilement (celui du panneau .fiche-content),
+     la liste d'épisodes ne défile pas séparément. Rangées compactes. */
+  .series-content .episodes-list { max-height: none; overflow-y: visible; }
+  .episode-row { gap: 0.6rem; padding: 0.75rem 0.7rem; }
+  .episode-num { min-width: 38px; font-size: 1.2rem; }
+
   /* Modale d'extraction des sous-titres */
   .subs-stats { grid-template-columns: repeat(3, 1fr); }
   .subs-footer { justify-content: stretch; }

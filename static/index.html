@@ -14,12 +14,12 @@
 
   <!-- Feuilles de style par fonctionnalité (base.css d'abord : variables,
        responsive.css en dernier : surcharges mobile). ?v=N = cache-busting. -->
-  <link rel="stylesheet" href="/static/css/base.css?v=14" />
-  <link rel="stylesheet" href="/static/css/nav.css?v=14" />
-  <link rel="stylesheet" href="/static/css/catalogue.css?v=14" />
-  <link rel="stylesheet" href="/static/css/player.css?v=14" />
-  <link rel="stylesheet" href="/static/css/modals.css?v=14" />
-  <link rel="stylesheet" href="/static/css/responsive.css?v=14" />
+  <link rel="stylesheet" href="/static/css/base.css?v=15" />
+  <link rel="stylesheet" href="/static/css/nav.css?v=15" />
+  <link rel="stylesheet" href="/static/css/catalogue.css?v=15" />
+  <link rel="stylesheet" href="/static/css/player.css?v=15" />
+  <link rel="stylesheet" href="/static/css/modals.css?v=15" />
+  <link rel="stylesheet" href="/static/css/responsive.css?v=15" />
 </head>
 
 <body>
@@ -113,23 +113,25 @@
     </div>
   </div>
 
-  <!-- SERIES MODAL -->
+  <!-- FICHE SÉRIE (même design plein écran que la fiche film) -->
   <div id="series-modal">
-    <div class="series-container">
-      <div class="series-header" id="seriesHeader">
-        <button class="icon-btn series-close" onclick="closeSeriesModal()">
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-        <div class="series-header-content">
-          <div class="series-modal-title" id="seriesModalTitle"></div>
-          <div class="series-meta" id="seriesModalMeta"></div>
-          <div class="series-overview" id="seriesModalOverview"></div>
-        </div>
+    <div class="fiche-container" id="seriesContainer">
+      <div class="fiche-backdrop" id="seriesBackdrop"></div>
+      <div class="fiche-letter" id="seriesLetter"></div>
+      <div class="fiche-grad"></div>
+      <button class="icon-btn fiche-close" onclick="closeSeriesModal()">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <div class="fiche-content series-content">
+        <div class="fiche-tag">Série</div>
+        <div class="fiche-title" id="seriesModalTitle"></div>
+        <div class="fiche-meta" id="seriesModalMeta"></div>
+        <div class="fiche-overview" id="seriesModalOverview"></div>
+        <div class="fiche-versions" id="seasonTabs"></div>
+        <div class="episodes-list" id="episodesList"></div>
       </div>
-      <div class="season-tabs" id="seasonTabs"></div>
-      <div class="episodes-list" id="episodesList"></div>
     </div>
   </div>
 
@@ -358,14 +360,14 @@
 
   <!-- Scripts par fonctionnalité, chargés dans l'ordre des dépendances
        (utils.js d'abord, main.js en dernier). ?v=N = cache-busting. -->
-  <script src="/static/js/utils.js?v=14"></script>
-  <script src="/static/js/catalogue.js?v=14"></script>
-  <script src="/static/js/cast.js?v=14"></script>
-  <script src="/static/js/options.js?v=14"></script>
-  <script src="/static/js/player.js?v=14"></script>
-  <script src="/static/js/details.js?v=14"></script>
-  <script src="/static/js/subtitles.js?v=14"></script>
-  <script src="/static/js/settings.js?v=14"></script>
-  <script src="/static/js/main.js?v=14"></script>
+  <script src="/static/js/utils.js?v=15"></script>
+  <script src="/static/js/catalogue.js?v=15"></script>
+  <script src="/static/js/cast.js?v=15"></script>
+  <script src="/static/js/options.js?v=15"></script>
+  <script src="/static/js/player.js?v=15"></script>
+  <script src="/static/js/details.js?v=15"></script>
+  <script src="/static/js/subtitles.js?v=15"></script>
+  <script src="/static/js/settings.js?v=15"></script>
+  <script src="/static/js/main.js?v=15"></script>
 </body>
 </html>

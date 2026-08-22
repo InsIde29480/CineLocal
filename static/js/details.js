@@ -207,27 +207,56 @@ function openSeries(seriesId) {
   currentSeries = series;
   document.getElementById('seriesModalTitle').textContent = series.title;
   updateSeriesMeta();
-  document.getElementById('seriesModalOverview').textContent = series.overview || '';
+  var ov = document.getElementById('seriesModalOverview');
+  ov.textContent = series.overview || '';
+  ov.style.display = series.overview ? '' : 'none';
 
-  var headerBg = series.backdrop || series.poster;
-  document.getElementById('seriesHeader').style.backgroundImage =
-    headerBg ? ('url(' + headerBg + ')') : 'linear-gradient(135deg, var(--bg3), var(--surface))';
+  // Image de fond : comme la fiche film (backdrop TMDB, sinon grande initiale)
+  var container = document.getElementById('seriesContainer');
+  var backdrop  = document.getElementById('seriesBackdrop');
+  var letter    = document.getElementById('seriesLetter');
+  var bg = series.backdrop || series.poster;
+  if (bg) {
+    container.classList.remove('no-image');
+    backdrop.style.backgroundImage = 'url(' + bg + ')';
+    letter.textContent = '';
+  } else {
+    container.classList.add('no-image');
+    backdrop.style.backgroundImage = '';
+    letter.textContent = (series.title || '?').charAt(0).toUpperCase();
+  }
 
   var seasons = [...new Set(series.episodes.map(function (e) { return e.season; }))].sort(function (a, b) { return a - b; });
   currentSeason = seasons[0];
-  document.getElementById('seasonTabs').innerHTML = seasons.map(function (s) {
-    return '<button class="season-tab ' + (s === currentSeason ? 'active' : '') +
-           '" onclick="selectSeason(' + s + ')">Saison ' + String(s).padStart(2, '0') + '</button>';
-  }).join('');
+  renderSeasonTabs(seasons);
   renderEpisodes();
   document.getElementById('series-modal').classList.add('open');
   document.body.style.overflow = 'hidden';
 }
 
+// Puces de saisons (mêmes .sub-chip que les versions de la fiche film).
+// Masquées s'il n'y a qu'une saison, comme le sélecteur de versions.
+function renderSeasonTabs(seasons) {
+  var el = document.getElementById('seasonTabs');
+  if (!seasons || seasons.length <= 1) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  var html = '<span class="fiche-subs-label">📅 Saison</span>';
+  seasons.forEach(function (s) {
+    html += '<button class="sub-chip' + (s === currentSeason ? ' active' : '')
+      + '" data-season="' + s + '" onclick="selectSeason(' + s + ')">S'
+      + String(s).padStart(2, '0') + '</button>';
+  });
+  el.innerHTML = html;
+}
+
 function selectSeason(season) {
   currentSeason = season;
-  document.querySelectorAll('.season-tab').forEach(function (t) {
-    t.classList.toggle('active', t.textContent.includes(String(season).padStart(2, '0')));
+  document.querySelectorAll('#seasonTabs .sub-chip').forEach(function (c) {
+    c.classList.toggle('active', parseInt(c.dataset.season, 10) === season);
   });
   renderEpisodes();
 }
