@@ -55,15 +55,12 @@ python3 --version
 
 # ffmpeg + ffprobe (extraction pistes, transcodage Cast)
 sudo apt install ffmpeg            # Debian / Ubuntu / Raspberry Pi OS
-
-# MPV (uniquement pour le mode "TV directe" sur sortie HDMI)
-sudo apt install mpv
 ```
 
 Dépendances Python :
 
 ```bash
-pip install flask waitress requests
+pip install -r requirements.txt
 ```
 
 ---
@@ -79,9 +76,12 @@ cd cinelocal
 
 ### 2. Configurer
 
-Édite les variables en tête de `server.py` (voir [Configuration](#configuration)).
-En particulier, renseigne **ta propre clé TMDB** (gratuite sur
-<https://www.themoviedb.org/settings/api>) dans la variable `TMDB_API_KEY`.
+Toute la configuration se fait **depuis l'onglet ⚙ Paramètres du site** une
+fois le serveur lancé (voir [Configuration](#configuration)). En particulier,
+renseigne **ta propre clé TMDB** (gratuite sur
+<https://www.themoviedb.org/settings/api>) — soit dans les Paramètres du site,
+soit via la variable d'environnement `TMDB_API_KEY`. Les valeurs par défaut
+(chemins, port…) sont dans `cinelocal/config.py`.
 
 ### 3. Lancer
 
@@ -98,19 +98,33 @@ Depuis un autre appareil du réseau → **http://&lt;ip-du-serveur&gt;:8765**
 
 ```
 cinelocal/
-├── server.py                # Serveur Flask (API + streaming + transcodage + sous-titres)
-├── static/
-│   ├── index.html           # Structure de la page
-│   ├── style.css            # Styles
-│   └── app.js               # Logique front-end
-├── convert_gui.ps1          # IHM de conversion (Windows) — choix GPU/CPU, qualité, résolution
-├── convert.ps1              # Conversion en ligne de commande + downscale 1080p (Windows)
-├── convert_only_format.ps1  # Conversion codec seul, sans downscale (Windows)
-├── check.ps1                # Vérification du format (Windows)
-└── check.sh                 # Vérification du format (Linux)
+├── server.py                # Point d'entrée : logs + création de l'app + waitress
+├── requirements.txt         # Dépendances Python (flask, requests, waitress)
+├── cinelocal/               # Package Python (logique du serveur)
+│   ├── config.py            #   valeurs par défaut (chemins, codecs, timeouts)
+│   ├── settings.py          #   paramètres persistés (onglet ⚙ Paramètres)
+│   ├── state.py             #   état partagé (chemins configurés)
+│   ├── parsing.py           #   analyse des noms de fichiers + ids stables
+│   ├── library.py           #   scan de la bibliothèque (films/séries/qualités)
+│   ├── scanner.py           #   extraction en masse + analyse auto périodique
+│   ├── media/               #   ffprobe.py, subtitles.py, streaming.py
+│   ├── providers/           #   tmdb.py, opensubtitles.py
+│   └── routes/              #   routes HTTP (blueprints Flask)
+├── static/                  # Interface web
+│   ├── index.html           #   structure de la page
+│   ├── css/                 #   styles par fonctionnalité (base, nav, catalogue,
+│   │                        #   player, modals, responsive)
+│   └── js/                  #   logique front par fonctionnalité (utils, catalogue,
+│                            #   cast, options, player, details, subtitles, settings, main)
+├── tools/                   # Outils de conversion (hors serveur)
+│   ├── convert_gui.ps1      #   IHM de conversion (Windows) — GPU/CPU, qualité, résolution
+│   ├── convert.ps1          #   conversion en ligne de commande (Windows)
+│   ├── convert.sh           #   conversion en ligne de commande (Linux)
+│   ├── check.ps1            #   vérification du format (Windows)
+│   └── check.sh             #   vérification du format (Linux)
+└── deploy/
+    └── cinelocal.service    # Unité systemd (lancement au démarrage)
 ```
-
-Les fichiers `style.css` et `app.js` sont servis automatiquement depuis `static/`.
 
 > Fichiers générés au premier lancement (à côté du dossier de films ou dans le
 > répertoire configuré) : `.tracks_cache/` (sous-titres VTT + métadonnées),
@@ -130,23 +144,23 @@ Les sous-titres externes sont détectés s'ils portent le **même nom** que la v
 
 La plupart des réglages se font **directement depuis l'onglet ⚙ Paramètres du
 site** (voir [Paramètres](#paramètres-interface-web)) et sont enregistrés dans
-`.cinelocal_settings.json` — plus besoin d'éditer `server.py`. Les valeurs en
-tête de `server.py` servent alors de **valeurs par défaut**.
+`.cinelocal_settings.json` — aucun fichier à éditer. Les valeurs de
+`cinelocal/config.py` servent alors de **valeurs par défaut**.
 
-| Réglage (Paramètres / `server.py`) | Défaut          | Description                          |
+| Réglage (Paramètres / `config.py`) | Défaut          | Description                          |
 |------------------------------------|-----------------|--------------------------------------|
 | Dossiers des films                 | *(à définir)*   | Un ou **plusieurs** dossiers, même structure `Films/…` |
 | Dossier des sous-titres (cache)    | `.tracks_cache` | Où sont stockés les VTT + métadonnées |
-| Clé API TMDB                       | *(à remplir)*   | Posters / synopsis                   |
+| Clé API TMDB                       | *(à remplir)*   | Posters / synopsis (ou variable d'environnement `TMDB_API_KEY`) |
 | OpenSubtitles (clé, identifiant, mot de passe, langues) | *(vide)* | Téléchargement des sous-titres manquants |
 | Analyse automatique (activée + intervalle) | `oui`, `60 min` | Détection/extraction/téléchargement périodiques |
-| `PORT`                             | `8765`          | Port du serveur (`server.py`)        |
+| `PORT`                             | `8765`          | Port du serveur (`config.py`)        |
 | `HOST`                             | `0.0.0.0`       | `0.0.0.0` = accessible sur le réseau |
-| `SUBS_ACCEPT_ALL_LANGS`            | `True`          | Extrait toutes les langues de sous-titres (`server.py`) |
+| `SUBS_ACCEPT_ALL_LANGS`            | `True`          | Extrait toutes les langues de sous-titres (`config.py`) |
 
 > Par défaut, **toutes** les langues de sous-titres texte sont extraites (on
 > choisit ensuite dans l'interface). Mettre `SUBS_ACCEPT_ALL_LANGS = False` dans
-> `server.py` pour se limiter à la liste `SUBS_LANG_OK` (fr / en).
+> `cinelocal/config.py` pour se limiter à la liste `SUBS_LANG_OK` (fr / en).
 >
 > Les identifiants sont stockés localement dans `.cinelocal_settings.json` ; le
 > mot de passe OpenSubtitles n'est jamais renvoyé au navigateur.
@@ -235,10 +249,11 @@ envoyés nativement au Chromecast.
 
 ## Conversion des films
 
-Trois outils Windows (ffmpeg requis dans le PATH) pour préparer les films au
-format compatible Chromecast : **H.264 + AAC-LC stéréo**, downscale **4K → 1080p**.
+Les outils de conversion vivent dans le dossier **`tools/`** (ffmpeg requis
+dans le PATH). Ils préparent les films au format compatible Chromecast :
+**H.264 + AAC-LC stéréo**, downscale **4K → 1080p**.
 
-### Interface graphique — `convert_gui.ps1` (recommandé)
+### Interface graphique — `tools/convert_gui.ps1` (recommandé)
 
 Une **fenêtre** (aucune installation, WinForms intégré à Windows) pour tout piloter
 sans éditer de script :
@@ -250,19 +265,18 @@ sans éditer de script :
 - sélection multiple, **barre de progression + ETA**, bouton **Annuler**.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\convert_gui.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\convert_gui.ps1
 ```
 
 > ⚠️ « Aucune limite » sur une source 4K produit un **H.264 4K** très lourd et
 > souvent injouable sur le Raspberry Pi. Pour le Pi/Chromecast, garde **1080p**.
 
-### En ligne de commande — `convert.ps1` / `convert_only_format.ps1`
+### En ligne de commande — `tools/convert.ps1` (Windows) / `tools/convert.sh` (Linux)
 
-`convert.ps1` prépare au format Chromecast et **downscale les 4K en 1080p**.
-`convert_only_format.ps1` ne change **que le codec** (sans downscale), utile pour
-garder la résolution d'origine.
+`convert.ps1` et `convert.sh` préparent au format Chromecast et
+**downscale les 4K en 1080p**.
 
-Autoriser l'exécution de scripts pour la session :
+Sous Windows, autoriser l'exécution de scripts pour la session :
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -271,7 +285,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 Lancer la conversion :
 
 ```powershell
-.\convert.ps1
+.\tools\convert.ps1     # Windows
+```
+
+```bash
+./tools/convert.sh      # Linux
 ```
 
 Le script scanne le dossier courant, liste les fichiers à convertir (mauvais codec,
@@ -301,12 +319,12 @@ audio non compatible, ou résolution > 1080p), et permet d'en sélectionner.
 ### Vérification du format
 
 ```powershell
-.\check.ps1      # Windows
+.\tools\check.ps1      # Windows
 ```
 
 ```bash
-chmod +x check.sh
-./check.sh        # Linux
+chmod +x tools/check.sh
+./tools/check.sh        # Linux
 ```
 
 ---
@@ -318,63 +336,25 @@ Le décodage dépend de **qui** lit le fichier :
 - **Mode PC** : c'est l'ordinateur client qui décode → tout format passe.
 - **Mode Chromecast** : le Chromecast décode → H.264 1080p uniquement (le serveur
   transcode le reste, ce qui est lourd pour une petite machine).
-- **Mode TV directe** : la machine serveur décode →
-  - **HEVC 4K** : OK sur une machine au décodeur matériel HEVC (ex. Raspberry Pi 5)
-  - **H.264 4K** : souvent injouable sur Raspberry Pi (pas de décodeur H.264 matériel,
-    le CPU ne suit pas) → convertir en 1080p avec `convert.ps1`
 
-**En résumé** : gardez vos **HEVC** tels quels pour la TV directe, et convertissez les
-**H.264 4K** (ou tout ce qui doit passer par le Chromecast) en 1080p H.264.
+**En résumé** : convertissez en 1080p H.264 tout ce qui doit passer par le
+Chromecast (`tools/convert.ps1` ou `tools/convert.sh`).
 
 ---
 
 ## Lancement automatique au démarrage (Linux / systemd)
 
-Créer `/etc/systemd/system/cinelocal.service` :
-
-```ini
-[Unit]
-Description=CineLocal - Serveur de films local
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=nas
-Group=nas
-WorkingDirectory=/home/nas/serveur_films
-ExecStart=/usr/bin/python3 /home/nas/serveur_films/server.py
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=cinelocal
-
-# Nécessaire pour le mode "TV directe" (MPV sur la sortie HDMI)
-Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/home/nas/.Xauthority"
-
-# Sécurité
-NoNewPrivileges=true
-PrivateTmp=true
-MemoryMax=80%
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Activer et gérer le service :
+L'unité systemd est fournie dans **`deploy/cinelocal.service`**. Adapte
+`User`, `Group`, `WorkingDirectory` et `ExecStart` au chemin d'installation,
+puis :
 
 ```bash
+sudo cp deploy/cinelocal.service /etc/systemd/system/cinelocal.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now cinelocal     # démarre + active au boot
 sudo systemctl restart cinelocal          # redémarrer
 sudo journalctl -u cinelocal -f           # suivre les logs
 ```
-
-> Les lignes `DISPLAY` / `XAUTHORITY` sont indispensables pour que MPV puisse
-> afficher la vidéo sur l'écran branché en HDMI. Sans elles, le mode TV directe
-> ne fonctionne pas.
 
 ---
 
@@ -400,7 +380,7 @@ pour les Blu-ray) : Subtitle Edit permet le changement de framerate et l'OCR.
 
 **Image saccadée / muette sur le Chromecast**
 Le fichier est probablement HEVC, 4K, 10-bit ou en HE-AAC/5.1 → convertissez-le en
-H.264 1080p AAC stéréo avec `convert.ps1`.
+H.264 1080p AAC stéréo avec `tools/convert.ps1` (ou `tools/convert.sh`).
 
 **Re-extraire les sous-titres (changement de langue, encodage, etc.)**
 Depuis l'interface : **💬 Sous-titres → Tout ré-extraire** (ou *Réessayer les
