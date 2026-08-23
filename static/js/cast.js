@@ -13,6 +13,13 @@ var pendingCastMovie  = null;
 var pendingAudioIdx   = null;
 var pendingSubTrack   = null;
 
+// Délais (ms) entre les tentatives d'envoi au Chromecast. À la PREMIÈRE
+// connexion sur une TV, le récepteur met parfois 10-15 s à démarrer : les
+// premiers loadMedia échouent alors normalement. On insiste donc longtemps
+// (~25 s au total) avec des délais croissants au lieu d'abandonner au bout
+// de 3 essais — c'est ce qui obligeait à recharger la page puis relancer.
+var CAST_RETRY_DELAYS = [1000, 1500, 2500, 4000, 6000, 9000];
+
 window['__onGCastApiAvailable'] = function (isAvailable) {
   castAvailable = isAvailable;
   console.log('[Cast] API disponible :', isAvailable);
@@ -40,7 +47,8 @@ window['__onGCastApiAvailable'] = function (isAvailable) {
           pendingAudioIdx  = null;
           pendingSubTrack  = null;
           closeCastOptions();
-          setTimeout(function () { sendToCast(pMovie, pAudio, pSub); }, 700);
+          _setCastStatus('⏳ Connexion à la TV…');
+          setTimeout(function () { sendToCast(pMovie, pAudio, pSub); }, 1000);
         }
       } else if (e.sessionState === S.SESSION_ENDED) {
         castSession = null;
@@ -55,7 +63,35 @@ function loadCastSdk() {
   castSdkLoaded = true;
   var s = document.createElement('script');
   s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+  // Échec de chargement (hors Chrome, hors ligne…) : on pourra retenter
+  // au prochain passage en mode 📺 au lieu de rester bloqué.
+  s.onerror = function () {
+    castSdkLoaded = false;
+    console.warn('[Cast] SDK injoignable (navigateur non compatible ou hors ligne)');
+  };
   document.head.appendChild(s);
+}
+
+// Charge le SDK dès l'arrivée sur la page (et pas seulement au passage en
+// mode 📺) : le contexte Cast est ainsi initialisé bien avant le premier
+// clic, ce qui fiabilise la toute première connexion à une TV.
+loadCastSdk();
+
+// Affiche un message dans la barre de statut Cast (en bas de l'écran).
+function _setCastStatus(text) {
+  var bar = document.getElementById('castStatus');
+  document.getElementById('castStatusText').textContent = text;
+  if (text) bar.classList.add('visible');
+}
+
+// Reprogramme un envoi après échec, avec un délai croissant. Renvoie false
+// quand toutes les tentatives sont épuisées (au bout de ~25 s).
+function _retryCast(movie, audioIdx, subTrack, attempt) {
+  if (attempt >= CAST_RETRY_DELAYS.length) return false;
+  var delay = CAST_RETRY_DELAYS[attempt - 1] || 2000;
+  _setCastStatus('⏳ Connexion à la TV… (essai ' + (attempt + 1) + '/' + CAST_RETRY_DELAYS.length + ')');
+  setTimeout(function () { sendToCast(movie, audioIdx, subTrack, attempt + 1); }, delay);
+  return true;
 }
 
 function sendToCast(movie, audioIdx, subTrack, attempt) {
@@ -71,6 +107,7 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
     .then(function (r) { return r.json(); })
     .then(function (info) {
       if (!info || info.error) {
+        _setCastStatus('✗ Cast : ' + (info && info.error ? info.error : 'réponse invalide'));
         alert('Erreur Cast : ' + (info && info.error ? info.error : 'réponse invalide'));
         return;
       }
@@ -78,9 +115,8 @@ function sendToCast(movie, audioIdx, subTrack, attempt) {
     })
     .catch(function (e) {
       console.error('[Cast] cast_info échoué :', e);
-      if (attempt < 3) {
-        setTimeout(function () { sendToCast(movie, audioIdx, subTrack, attempt + 1); }, 1500);
-      } else {
+      if (!_retryCast(movie, audioIdx, subTrack, attempt)) {
+        _setCastStatus('✗ Impossible de préparer le flux');
         alert('Erreur Cast : impossible de préparer le flux');
       }
     });
@@ -129,13 +165,14 @@ function launchCastMedia(movie, audioIdx, subTrack, attempt, info) {
     })
     .catch(function (e) {
       console.error('[Cast] Erreur (tentative ' + attempt + ') :', e);
-      // Juste après l'ouverture de la session, le récepteur peut refuser le
-      // tout premier chargement : on retente automatiquement avant d'abandonner.
-      if (attempt < 3) {
-        setTimeout(function () { sendToCast(movie, audioIdx, subTrack, attempt + 1); }, 1200);
-        return;
-      }
-      alert('Erreur Cast : ' + (e.description || JSON.stringify(e)));
+      // À la première connexion sur une TV, le récepteur met parfois plus de
+      // 10 s à démarrer et refuse les premiers chargements : on insiste avec
+      // des délais croissants (~25 s au total) avant d'abandonner.
+      if (_retryCast(movie, audioIdx, subTrack, attempt)) return;
+      _setCastStatus('✗ La TV n’a pas répondu — réessaie (📺 Lancer le Cast)');
+      alert('Erreur Cast : ' + (e.description || JSON.stringify(e))
+        + '\nLa TV n’a pas répondu à temps — clique à nouveau sur « Lancer le Cast »,'
+        + ' la connexion est déjà établie.');
     });
 }
 
