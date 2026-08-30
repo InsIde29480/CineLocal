@@ -386,7 +386,7 @@ que l'ordinateur et le Chromecast sont sur le **même réseau WiFi**.
 Forcez le rechargement sans cache : `Ctrl + Shift + R`.
 
 **Sous-titres décalés**
-Utilisez l'outil intégré : **⚙ Paramètres → Outils → Resynchroniser des
+Utilisez l'outil intégré : **Paramètres → Outils → Resynchroniser des
 sous-titres décalés** (avance/retarde de X secondes). Pour un décalage qui
 s'aggrave au fil du film, c'est un problème de **framerate** (souvent 23.976 fps
 pour les Blu-ray) : Subtitle Edit permet le changement de framerate et l'OCR.
