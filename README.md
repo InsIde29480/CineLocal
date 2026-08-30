@@ -89,7 +89,7 @@ cd cinelocal
 
 ### 2. Configurer
 
-Toute la configuration se fait **depuis l'onglet ⚙ Paramètres du site** une
+Toute la configuration se fait **depuis l'onglet Paramètres du site** une
 fois le serveur lancé (voir [Configuration](#configuration)). En particulier,
 renseigne **ta propre clé TMDB** (gratuite sur
 <https://www.themoviedb.org/settings/api>) — soit dans les Paramètres du site,
@@ -182,17 +182,17 @@ site** (voir [Paramètres](#paramètres-interface-web)) et sont enregistrés dan
 
 ## Paramètres (interface web)
 
-Le bouton **⚙ Paramètres** (barre de navigation) ouvre une fenêtre pour tout
+Le bouton **Paramètres** (barre de navigation) ouvre une fenêtre pour tout
 configurer sans toucher aux fichiers :
 
-- **📁 Chemins** — un ou plusieurs **dossiers de films** (un par ligne, plusieurs
+- **Chemins** — un ou plusieurs **dossiers de films** (un par ligne, plusieurs
   disques possibles) et le **dossier de cache** des sous-titres. Un changement
   relance automatiquement l'analyse de la bibliothèque.
-- **🎬 TMDB** — clé API pour les affiches et synopsis.
-- **💬 OpenSubtitles** — clé API, identifiant, mot de passe et ordre des langues
+- **TMDB** — clé API pour les affiches et synopsis.
+- **OpenSubtitles** — clé API, identifiant, mot de passe et ordre des langues
   (`fr, en`) pour le téléchargement des sous-titres.
-- **🔁 Analyse automatique** — activer/désactiver et régler l'intervalle (min. 5 min).
-- **🛠️ Outils** — accès à la **resynchronisation des sous-titres** (voir ci-dessous).
+- **Analyse automatique** — activer/désactiver et régler l'intervalle (min. 5 min).
+- **Outils** — accès à la **resynchronisation des sous-titres** (voir ci-dessous).
 
 Tout est enregistré côté serveur et rechargé au démarrage.
 
@@ -200,7 +200,7 @@ Tout est enregistré côté serveur et rechargé au démarrage.
 
 ## Sous-titres (extraction, téléchargement, resynchronisation)
 
-Le bouton **💬 Sous-titres** ouvre la fenêtre de gestion :
+Le bouton **Sous-titres** ouvre la fenêtre de gestion :
 
 - **Extraction en masse** : parcourt tous les films/épisodes et extrait leurs
   sous-titres en VTT (toutes les pistes d'un fichier sont extraites **en une
@@ -223,7 +223,7 @@ Le bouton **💬 Sous-titres** ouvre la fenêtre de gestion :
 
 ### Resynchroniser un sous-titre décalé
 
-**⚙ Paramètres → 🛠️ Outils → Resynchroniser des sous-titres décalés** : recherche
+**Paramètres → Outils → Resynchroniser des sous-titres décalés** : recherche
 un film/épisode, choisis la langue, puis **avance ou retarde** les timecodes de X
 secondes (décimales acceptées, ex. `1.05`). Le décalage s'applique au sous-titre
 servi (et au `.srt` source pour les externes). Ré-applique pour affiner.
@@ -281,7 +281,7 @@ sans éditer de script :
 powershell -ExecutionPolicy Bypass -File .\tools\convert_gui.ps1
 ```
 
-> ⚠️ « Aucune limite » sur une source 4K produit un **H.264 4K** très lourd et
+> « Aucune limite » sur une source 4K produit un **H.264 4K** très lourd et
 > souvent injouable sur le Raspberry Pi. Pour le Pi/Chromecast, garde **1080p**.
 
 ### En ligne de commande — `tools/convert.ps1` (Windows) / `tools/convert.sh` (Linux)
@@ -386,7 +386,7 @@ que l'ordinateur et le Chromecast sont sur le **même réseau WiFi**.
 Forcez le rechargement sans cache : `Ctrl + Shift + R`.
 
 **Sous-titres décalés**
-Utilisez l'outil intégré : **⚙ Paramètres → 🛠️ Outils → Resynchroniser des
+Utilisez l'outil intégré : **⚙ Paramètres → Outils → Resynchroniser des
 sous-titres décalés** (avance/retarde de X secondes). Pour un décalage qui
 s'aggrave au fil du film, c'est un problème de **framerate** (souvent 23.976 fps
 pour les Blu-ray) : Subtitle Edit permet le changement de framerate et l'OCR.
@@ -396,13 +396,13 @@ Le fichier est probablement HEVC, 4K, 10-bit ou en HE-AAC/5.1 → convertissez-l
 H.264 1080p AAC stéréo avec `tools/convert.ps1` (ou `tools/convert.sh`).
 
 **Re-extraire les sous-titres (changement de langue, encodage, etc.)**
-Depuis l'interface : **💬 Sous-titres → Tout ré-extraire** (ou *Réessayer les
+Depuis l'interface : **Sous-titres → Tout ré-extraire** (ou *Réessayer les
 échecs & sans S-T*). Sinon, videz le cache `rm -rf .tracks_cache/` puis
 redémarrez le serveur.
 
 **Mojibake dans les sous-titres (accents `Ã©`, `�`)**
 Les `.srt` non-UTF-8 (Windows-1252 / Latin-1) sont désormais détectés et
-convertis automatiquement. Relancez **💬 Sous-titres → Tout ré-extraire** pour
+convertis automatiquement. Relancez **Sous-titres → Tout ré-extraire** pour
 régénérer les anciens sous-titres avec le bon encodage.
 
 ---
